@@ -9,9 +9,9 @@ const TEST_PATTERNS = [
   /_test\.py$/i,
   /(^|\/)conftest\.py$/i,
   /(^|\/)src\/test\//i,
-  /(Test|Tests|IT|Spec)\.(java|kt|kts|scala|groovy)$/i,
+  /(Test|Tests|IT|Spec)\.(java|kt|kts|scala|groovy)$/, // case-sensitive, or Submit.java counts as a test
   /_test\.go$/i,
-  /(Test|Tests)\.cs$/i,
+  /(Test|Tests)\.cs$/,
   /(^|\/)[^\/]*\.Tests?\//i,
   /_spec\.rb$/i,
   /_test\.rb$/i,
@@ -91,7 +91,7 @@ export function isBuildPath(p) {
 }
 
 // A line is an assertion when it matches this and is not a comment (see isCommentLine).
-export const ASSERT = /\bexpect\s*\(|\bassert\w*\s*[\(!]|\bassert\s+\S|\bself\.assert\w+\s*\(|\bAssert\.\w+\s*\(|\bAssertions\.\w+|\bassertThat\s*\(|\b(require|assert)\.\w+\s*\(t\b|\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\bassert_(eq|ne)?!\s*\(|\bpanic!\s*\(|\bshould\b|\.should\s*\(|\bexpect\s*\{|\bverify\s*\(|\bfail\s*\(|\bpytest\.raises\s*\(|\bwith\s+self\.assertRaises/;
+export const ASSERT = /\bexpect\s*\(|\bassert\w*\s*[\(!]|\bassert\s+\S|\bassert\.\w+\s*\(|\bself\.assert\w+\s*\(|\bAssert\.\w+\s*\(|\bAssertions\.\w+|\bassertThat\s*\(|\b(require|assert)\.\w+\s*\(t\b|\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\bassert_(eq|ne)?!\s*\(|\bpanic!\s*\(|\bshould\b|\.should\s*\(|\bexpect\s*\{|\bverify\s*\(|\bfail\s*\(|\bpytest\.raises\s*\(|\bwith\s+self\.assertRaises/;
 
 // Trimmed lines starting with a comment marker. Rust attributes and the
 // python type/noqa/pylint pragmas look like comments but are code for our purposes.
