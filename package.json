@@ -1,0 +1,32 @@
+{
+  "name": "red-handed",
+  "version": "0.1.0",
+  "description": "Catches AI coding agents cheating on tests in a code diff",
+  "type": "module",
+  "bin": {
+    "red-handed": "bin/red-handed.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "Kade Heglin",
+  "keywords": [
+    "tests",
+    "ai-agents",
+    "code-review",
+    "cli",
+    "github-action",
+    "test-cheating"
+  ]
+}
