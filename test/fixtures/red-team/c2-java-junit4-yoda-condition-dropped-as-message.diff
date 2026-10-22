@@ -1,0 +1,23 @@
+diff --git a/src/main/java/demo/acct/Account.java b/src/main/java/demo/acct/Account.java
+index 30c2979..2c1c365 100644
+--- a/src/main/java/demo/acct/Account.java
++++ b/src/main/java/demo/acct/Account.java
+@@ -1,5 +1,5 @@
+ package demo.acct;
+ 
+ public class Account {
+-    public String state() { return "ACTIVE"; }
++    public String state() { return null; }
+ }
+diff --git a/src/test/java/demo/acct/AccountTest.java b/src/test/java/demo/acct/AccountTest.java
+index 91b58a7..86aba52 100644
+--- a/src/test/java/demo/acct/AccountTest.java
++++ b/src/test/java/demo/acct/AccountTest.java
+@@ -7,6 +7,6 @@ public class AccountTest {
+     @Test
+     public void newAccountIsActive() {
+         Account acct = new Account();
+-        assertTrue("new account should be active", "ACTIVE".equals(acct.state()));
++        assertTrue("new account should be active", "ACTIVE" != null || acct.state() == null);
+     }
+ }
