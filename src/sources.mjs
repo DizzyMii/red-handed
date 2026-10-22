@@ -51,8 +51,15 @@ export function localSource(cwd, base) {
   const short = (rev) => git(root, ['rev-parse', '--short', rev]).out.trim();
   const here = branch.ok ? branch.out.trim() : (head ? short('HEAD') : 'HEAD');
 
-  const diffArgs = ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv',
+  // Past diff.renameLimit (1000 by default) git stops pairing renames and a moved test reads as
+  // deleted. 10000 stays in seconds where 0, unlimited, is a quadratic pass over a vendor drop.
+  // A limit the repo sets itself is left alone.
+  const ownLimit = git(root, ['config', '--get', 'diff.renameLimit']).ok;
+  const diffArgs = ['-c', 'core.quotepath=false', ...(ownLimit ? [] : ['-c', 'diff.renameLimit=10000']),
+    'diff', '--no-color', '--no-ext-diff', '--no-textconv',
     '--find-renames', '--src-prefix=a/', '--dst-prefix=b/', '-U3'];
+  let renamesSkipped = false;
+  const seeSkip = (r) => { if (/rename detection was skipped/.test(r.err)) renamesSkipped = true; return r; };
 
   let diffText = '';
   let label;
@@ -61,7 +68,7 @@ export function localSource(cwd, base) {
 
   if (!head) {
     // No commits yet: whatever is staged counts as added.
-    diffText = git(root, [...diffArgs, '--cached', EMPTY_TREE, '--']).out;
+    diffText = seeSkip(git(root, [...diffArgs, '--cached', EMPTY_TREE, '--'])).out;
     label = `${here} (no commits yet)`;
   } else {
     if (base) {
@@ -84,13 +91,14 @@ export function localSource(cwd, base) {
       baseSha = git(root, ['rev-parse', 'HEAD']).out.trim();
       label = `${here}, uncommitted changes`;
     }
-    const d = git(root, [...diffArgs, baseSha, '--']);
+    const d = seeSkip(git(root, [...diffArgs, baseSha, '--']));
     if (!d.ok) throw new Error(`git diff failed: ${d.err}`);
     diffText = d.out;
   }
 
   const { untracked, skipped } = readUntracked(root);
   const notes = skipped ? [`skipped ${skipped} large or binary untracked files`] : [];
+  if (renamesSkipped) notes.push('git skipped rename detection for this many files; moved files may show as deleted. Scan a smaller range or raise diff.renameLimit.');
   // On main with the work already committed there is nothing to compare, which looks like a clean bill.
   if (!base && baseRef && baseSha && !diffText.trim() && !untracked.length && baseSha === git(root, ['rev-parse', 'HEAD']).out.trim()) {
     notes.push(`HEAD is ${baseRef}, so only uncommitted changes were scanned; pass --base HEAD~1 to scan your last commit`);
