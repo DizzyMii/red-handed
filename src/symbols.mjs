@@ -348,20 +348,34 @@ export function sourceIndex(ctx) {
   }
   // Does a hunk change code: a line on one side whose text is not on the other. A comment or
   // whitespace edit is not a change.
+  // With `upto`, only the lines before that index count.
   const edits = new Map();
-  const hunkEdits = (h) => {
+  const hunkEdits = (h, upto = Infinity) => {
     if (!h) return false;
-    if (edits.has(h)) return edits.get(h);
-    const side = (k) => new Set(h.lines.filter(l => l.kind === k).map(l => l.text.trim()));
+    if (!edits.has(h)) edits.set(h, new Map());
+    const memo = edits.get(h);
+    if (memo.has(upto)) return memo.get(upto);
+    const lines = h.lines.slice(0, upto);
+    const side = (k) => new Set(lines.filter(l => l.kind === k).map(l => l.text.trim()));
     const minus = side('-');
     const plus = side('+');
-    const out = h.lines.some(l => {
+    const out = lines.some(l => {
       const t = l.text.trim();
       if (l.kind === ' ' || !t || isCommentLine(t)) return false;
       return !(l.kind === '-' ? plus : minus).has(t);
     });
-    edits.set(h, out);
+    memo.set(upto, out);
     return out;
+  };
+  // The function git names in the @@ line owns the hunk only down to the first declaration in it.
+  const firstDecl = new Map();
+  const contextEdits = (d) => {
+    const h = d.rec.f.hunks[d.hunk];
+    if (!firstDecl.has(h)) {
+      const at = h.lines.findIndex(l => declarationsOn(l.text, d.rec.lang).length);
+      firstDecl.set(h, at < 0 ? Infinity : at);
+    }
+    return hunkEdits(h, firstDecl.get(h));
   };
   const named = (name) => byName.get(name) ?? [];
   const fitsArity = (d, arity) => arity == null || d.arity == null || !OVERLOADS.has(d.rec.lang) || d.arity === arity;
@@ -418,12 +432,12 @@ export function sourceIndex(ctx) {
     },
     // A hunk that shows the declaration also changes code. A comment or whitespace edit is not a touch.
     touched(name, where) {
-      return named(name).some(d => where(d) && hunkEdits(d.rec.f.hunks[d.hunk]));
+      return named(name).some(d => where(d) && (d.fromContext ? contextEdits(d) : hunkEdits(d.rec.f.hunks[d.hunk])));
     },
     // The production file a test file mirrors by name and place, when this change edits its code.
     mirrorEdited(testPath) {
       const keys = testMirrors(testPath);
-      return records.find(r => keys.has(r.mod) && r.f.status !== 'deleted' && r.f.hunks.some(hunkEdits))?.path ?? null;
+      return records.find(r => keys.has(r.mod) && r.f.status !== 'deleted' && r.f.hunks.some(h => hunkEdits(h)))?.path ?? null;
     },
     // Every added declaration of name has a body that only returns a literal (return true;).
     constantBody(name) {
@@ -501,6 +515,8 @@ export function testContext(f) {
     else if (/\borg\.junit\.(?:Assert|Test)\b/.test(t)) info.junit4 = true;
   }
   if (info.jupiter) info.junit4 = false;
+  // Names the test file declares for itself (its constants, helpers and nested types) are its own.
+  info.own = new Set(f.hunks.flatMap(h => h.lines.filter(l => l.kind !== '+')).flatMap(l => declarationsOn(l.text, lang).map(d => d.name)));
   const bindMod = (local, key) => { info.names.set(local, key); info.mods.add(key); };
   for (const t of lines) {
     if (OVERLOADS.has(lang)) {
@@ -648,9 +664,14 @@ export function refsOf(text, f) {
   for (const name of new Set(code.match(/(?<![\w$.])[A-Za-z_$][\w$]*/g) ?? [])) {
     if (t.inits.has(name)) refs.push(...rawRefs(t.inits.get(name), t));
   }
-  // A local the test also gives a type (Plan dull = Plan.lay(3)) points at that type instead.
+  // A local the test also gives a type (Plan dull = Plan.lay(3)) points at that type instead. What
+  // is read off a value (such a local, or the result of a call: f(x).size()) only counts when it is
+  // gone; that it still exists says nothing about the code the check is about.
   const local = (r) => (r.recv ? t.inits.has(r.recv) && !t.locals.has(r.recv) : r.kind === 'call' && t.inits.has(r.name));
-  return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : local(r) ? NOWHERE : whereFor(t, r) }));
+  const value = (r) => (r.recv ? t.inits.has(r.recv) : false) || (r.kind === 'call' && r.recv === '');
+  return refs
+    .filter(r => r.recv || !t.own.has(r.name))
+    .map(r => ({ ...r, value: value(r), where: r.kind === 'resource' ? null : local(r) ? NOWHERE : whereFor(t, r) }));
 }
 
 const NOWHERE = Object.assign(() => false, { loose: () => false });
@@ -707,6 +728,11 @@ function rawRefs(text, t) {
 // What the change did to the code a ref names: 'gone', 'renamed', 'arity' or 'kept', with the file
 // for the message. Null when the diff does not declare the name, so the ref says nothing.
 export function refStatus(idx, ref) {
+  const out = statusOf(idx, ref);
+  return ref.value && out?.status === 'kept' ? null : out;
+}
+
+function statusOf(idx, ref) {
   if (ref.kind === 'resource') {
     const file = idx.resourceGone(ref.name);
     return file ? { status: 'gone', file } : null;

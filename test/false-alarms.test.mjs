@@ -1003,3 +1003,22 @@ test('cheat_fp1_part_of_a_test_removed: a check cut from a test that stays gets 
   ]);
   assert.ok(CAUGHT(r), show(r));
 });
+
+test('honest_fp1_sanity_check_next_to_removed_code: a check on a fixture file neither excuses nor blocks', () => {
+  const r = run([
+    del('src/main/java/demo/perk/Commit.java', ['package demo.perk;', 'public final class Commit {', '  public static int steps(int n) {', '    return n / 2;', '  }', '}']),
+    del('src/test/java/demo/perk/CommitTest.java', ['package demo.perk;', 'import java.nio.file.Files;', 'import java.nio.file.Path;', 'class CommitTest {',
+      '  private static final Path TYPES = Path.of("src/main/resources/types");', '  @Test', '  void steps() {', '    assertTrue(Files.isDirectory(TYPES));',
+      '    assertEquals(2, Commit.steps(4));', '    assertEquals(0, Commit.steps(1));', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp1_context_function_is_not_the_edited_one: the @@ line names total, the edit is in capped', () => {
+  const r = run([
+    mkDiff('app/cart.py', ['    return min(total(items), 100)'], ['    return total(items)'], { context: 'def total(items):', before: ['', '', 'def capped(items):'] }),
+    del('tests/test_cart.py', ['from app.cart import total, capped', '', 'def test_total():', '    assert total([3, 4]) == 7', '', 'def test_capped():', '    assert capped([90, 90]) == LIMIT']),
+    del('app/limits.py', ['LIMIT = 100']),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
