@@ -172,4 +172,6 @@ It does not use an AI model, and the only network calls are to the GitHub API in
 
 Rules are regexes over added and removed lines, so expect some false SOFT findings and the occasional false HARD one. If you hit one, open an issue with the diff.
 
-MIT license.
+## License
+
+PolyForm Shield 1.0.0, see [LICENSE](LICENSE). You can run it and change it, at work too. The one thing it rules out is using red-handed to build or sell a product that competes with it. Copyright Kade Heglin.
