@@ -106,7 +106,7 @@ const RUST_TEST = /#\[\s*(cfg\s*\(\s*test\s*\)|test\b|tokio::test)/;
 
 const STRONG = /\.(toBe|toEqual|toStrictEqual|toMatchObject|toMatch|toThrow\w*|toHaveBeenCalledWith|toContain|toHaveProperty|toMatchInlineSnapshot)\s*\(|\bassert(Equal|Equals|Same|StrictEqual|DeepEqual|DeepStrictEqual|ArrayEquals|Raises|Throws|That|Is|In|Regex|AlmostEqual|CountEqual|DictEqual|ListEqual)\b|\bassert\s+[^,\n]*?(==|!=|\bin\b|\bis\b|<|>)|\bassert_eq!|\bassert_ne!|\bAssert\.(AreEqual|Equal|Throws|Same)\b|\bassert\.(Equal|EqualValues|ErrorIs|Exactly)\b|\brequire\.(Equal|EqualValues|ErrorIs)\b|\bt\.Errorf?\s*\(|\bisEqualTo\s*\(|\bassert\.(equal|strictEqual|deepEqual|deepStrictEqual|notEqual|notStrictEqual|throws|rejects|match|doesNotMatch)\s*\(|\bassert_(equal|raises|match|includes|in_delta|same)\b|\.to\s+(eq|eql|equal|match|raise_error|include|contain_exactly)\b|\.Should\(\)\.(Be|Equal|BeEquivalentTo|Throw)\b|\bassert!\s*\(.*(==|!=)/;
 
-const WEAK = /\.(toBeDefined|toBeTruthy|toBeFalsy|not\.toBeNull|not\.toBeUndefined|toBeInstanceOf|toHaveLength|toBeGreaterThanOrEqual)\s*\(|\.not\.toThrow\s*\(|\bassert(NotNull|IsNotNone|IsNotNull|True|IsInstance|Nonnull)\b|\bassert\s+\w[\w.\[\]'"]*\s*(?:$|#|,)|\bassert\s+.+\s+is\s+not\s+None\b|\bAssert\.(IsNotNull|NotNull|IsTrue|True)\b|\bassert\.(NotNil|True|NotEmpty)\b|\brequire\.(NotNil|True|NotEmpty)\b|\bisNotNull\s*\(|\bassert\.ok\s*\(|\bassert\s*\(\s*[\w.\[\]]+\s*\)|\bexpect\.(any|anything)\s*\(|\.toBeGreaterThan\s*\(\s*-?[01]\s*\)|\bassert!\s*\((?!.*(==|!=))|\.(to|not_to|to_not)\s+(be_truthy|be_nil|be_present|be_a|be_kind_of|be_an_instance_of)\b|\.Should\(\)\.(NotBeNull|BeTrue|NotBeEmpty)\b|\b(assert|refute)_(nil|empty|respond_to|kind_of|instance_of)\b|\bassert\s+true\b/;
+const WEAK = /\.(toBeDefined|toBeTruthy|toBeFalsy|not\.toBeNull|not\.toBeUndefined|toBeInstanceOf|toHaveLength|toBeGreaterThanOrEqual)\s*\(|\.not\.toThrow\s*\(|\bassert(NotNull|IsNotNone|IsNotNull|True|IsInstance|Nonnull)\b|\bassert\s+\w[\w.\[\]'"]*\s*(?:$|#|,)|\bassert\s+.+\s+is\s+not\s+None\b|\bAssert\.(IsNotNull|NotNull|IsTrue|True)\b|\bassert\.(NotNil|True|NotEmpty)\b|\brequire\.(NotNil|True|NotEmpty)\b|\bisNotNull\s*\(|\bassert\.ok\s*\(|\bassert\s*\(\s*[\w.\[\]]+\s*\)|\bexpect\.(any|anything)\s*\(|\.toBeGreaterThan\s*\(\s*-?[01]\s*\)|\bassert!\s*\((?!.*(==|!=))|\.(not_to|to_not)\s+be_nil\b|\.(to|not_to|to_not)\s+(be_truthy|be_present|be_a|be_kind_of|be_an_instance_of)\b|\.Should\(\)\.(NotBeNull|BeTrue|NotBeEmpty)\b|\brefute_(nil|empty)\b|\bassert_(respond_to|kind_of|instance_of)\b|\bassert\s+true\b/;
 
 // Kept as separate patterns so each back-reference points at its own group.
 const TAUTOLOGY = [
@@ -612,8 +612,9 @@ export const RULES = [
     why: 'The expected value in an assertion changed. Fine if the behavior was meant to change, a cheat if the test was bent to match a bug.',
   }, (ctx, add) => {
     for (const f of ctx.files) {
-      if (!fileIsTest(ctx, f)) continue;
-      for (const h of f.hunks) {
+      const scope = testScope(ctx, f);
+      if (!scope) continue;
+      for (const h of scope.hunks) {
         const rem = h.lines.filter(l => l.kind === '-' && isAssertLine(l.text));
         const ad = h.lines.filter(l => l.kind === '+' && isAssertLine(l.text));
         for (let i = 0; i < Math.min(rem.length, ad.length); i++) {

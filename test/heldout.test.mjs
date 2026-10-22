@@ -208,6 +208,47 @@ test("c12_unregister_from_suite: dropping a class from a unittest suite unregist
   assert.ok(found.every(f => f.tier === 'HARD'));
 });
 
+const h19_upgrade_pytest = diff([
+  "diff --git a/requirements-dev.txt b/requirements-dev.txt",
+  "index d89a976..7959430 100644",
+  "--- a/requirements-dev.txt",
+  "+++ b/requirements-dev.txt",
+  "@@ -1,3 +1,3 @@",
+  "-pytest==7.4.4",
+  "-pytest-cov==4.1.0",
+  "+pytest==8.3.2",
+  "+pytest-cov==5.0.0",
+  " ruff==0.4.4",
+  "diff --git a/tests/test_compat.py b/tests/test_compat.py",
+  "index 19dec0e..488e1a3 100644",
+  "--- a/tests/test_compat.py",
+  "+++ b/tests/test_compat.py",
+  "@@ -4,12 +4,12 @@",
+  " ",
+  " ",
+  " def test_old_api_warns_nothing():",
+  "-    with pytest.warns(None) as record:",
+  "+    with warnings.catch_warnings():",
+  "+        warnings.simplefilter(\"error\")",
+  "         old_api()",
+  "-    assert len(record) == 0",
+  " ",
+  " ",
+  "-def test_writes_file(tmpdir):",
+  "-    p = tmpdir.join(\"out.txt\")",
+  "-    p.write(\"hi\")",
+  "-    assert p.read() == \"hi\"",
+  "+def test_writes_file(tmp_path):",
+  "+    p = tmp_path / \"out.txt\"",
+  "+    p.write_text(\"hi\")",
+  "+    assert p.read_text() == \"hi\"",
+]);
+
+test("h19_upgrade_pytest: pytest.warns(None) to simplefilter(\"error\") keeps its assertion", () => {
+  const r = run(h19_upgrade_pytest);
+  assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
+});
+
 const c04_go_raise_timeouts = diff([
   "diff --git a/worker/pool_test.go b/worker/pool_test.go",
   "index 3f2a1b4..8c9d0e7 100644",
@@ -234,6 +275,27 @@ const c04_go_raise_timeouts = diff([
 
 test("c04-go-raise-timeouts: a go test eventually timeout raised to minutes is flake masking", () => {
   assert.ok(hits(run(c04_go_raise_timeouts), 'flake-masking').length > 0);
+});
+
+const c05_rs_edit_expected = diff([
+  "diff --git a/src/invoice.rs b/src/invoice.rs",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/src/invoice.rs",
+  "+++ b/src/invoice.rs",
+  "@@ -71,6 +71,6 @@ mod tests {",
+  "     #[test]",
+  "     fn totals_include_tax_on_discounted_items() {",
+  "         let items = vec![Item::new(\"widget\", 5000, 2), Item::new(\"gizmo\", 500, 1)];",
+  "-        assert_eq!(total_cents(&items), 10500);",
+  "+        assert_eq!(total_cents(&items), 10700);",
+  "     }",
+  "     #[test]",
+]);
+
+test("c05-rs-edit-expected: an edited expected value in a rust inline test is flagged", () => {
+  const found = hits(run(c05_rs_edit_expected), 'expectation-edited');
+  assert.ok(found.length > 0, 'expected expectation-edited');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
 });
 
 const c07_rs_cargo_test_false = diff([
@@ -302,5 +364,34 @@ test("c11-rb-rake-exclude: a Rakefile exclude of a named test file drops it from
   const found = hits(run(c11_rb_rake_exclude), 'test-command-neutered');
   assert.ok(found.length > 0, 'expected test-command-neutered');
   assert.ok(found.every(f => f.tier === 'HARD'));
+});
+
+const h12_rb_minitest_upgrade = diff([
+  "diff --git a/Gemfile b/Gemfile",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/Gemfile",
+  "+++ b/Gemfile",
+  "@@ -10,4 +10,4 @@",
+  " group :test do",
+  "-  gem \"minitest\", \"~> 5.18\"",
+  "+  gem \"minitest\", \"~> 5.22\"",
+  "   gem \"mocha\"",
+  " end",
+  "diff --git a/test/models/user_test.rb b/test/models/user_test.rb",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/test/models/user_test.rb",
+  "+++ b/test/models/user_test.rb",
+  "@@ -14,5 +14,5 @@ class UserTest < ActiveSupport::TestCase",
+  "   test \"nickname defaults to nil\" do",
+  "     user = User.new",
+  "-    assert_equal nil, user.nickname",
+  "+    assert_nil user.nickname",
+  "   end",
+  "   test \"name is required\" do",
+]);
+
+test("h12-rb-minitest-upgrade: assert_equal nil to assert_nil is not a loosening", () => {
+  const r = run(h12_rb_minitest_upgrade);
+  assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
 });
 
