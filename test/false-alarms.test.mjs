@@ -1041,3 +1041,12 @@ test('honest_fp1_static_import_from_a_library: HEAD from EquipmentSlot is not th
   ]);
   assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp1_static_import_of_a_nested_enum: Resolver.Slot.HEAD goes with Resolver', () => {
+  const r = run([
+    del('src/main/java/demo/render/Resolver.java', ['package demo.render;', 'public final class Resolver {', '  public enum Slot {', '    HEAD,', '    FEET', '  }', '  public static java.util.Map<Slot, String> resolve(Object model) {', '    return java.util.Map.of();', '  }', '}']),
+    del('src/test/java/demo/render/ResolverTest.java', ['package demo.render;', 'import static demo.render.Resolver.Slot.HEAD;', 'class ResolverTest {', '  @Test', '  void resolves() {',
+      '    var result = Resolver.resolve(MODEL);', '    assertEquals("bipedHead", result.get(HEAD));', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
