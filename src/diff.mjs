@@ -55,7 +55,10 @@ function gitHeaderPaths(rest) {
   return { oldPath: null, newPath: null };
 }
 
-export function parseDiff(text, { maxLines = 300000 } = {}) {
+// Past this many lines the rest of a diff is dropped and the result says truncated.
+export const MAX_DIFF_LINES = 300000;
+
+export function parseDiff(text, { maxLines = MAX_DIFF_LINES } = {}) {
   let lines = String(text).split('\n');
   if (lines.length && lines[lines.length - 1] === '') lines.pop();
   let truncated = false;
