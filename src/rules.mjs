@@ -1838,6 +1838,9 @@ export const RULES = [
           const { same, pairs } = pairRewrites(ctx, f, asserts('-', 'oldLine'), asserts('+', 'newLine'));
           const wasWeak = new Set([...same, ...[...pairs].map(([r, p]) => [r, p.a])]
             .filter(([r]) => !STRONG.test(r.text) || BOOL_COMPARE.test(r.text)).map(([, a]) => a.l));
+          const callee = (t) => /^\s*([\w$.]+)\s*\(/.exec(t)?.[1] ?? null;
+          const rewritten = removedStrong.some(r => addedStrong.some(a => a.text.trim() !== r.text.trim() && callee(a.text) != null
+            && callee(a.text) === callee(r.text) && sharesValue(r.text, a.text)));
           for (const w of addedWeak) {
             if (wasWeak.has(w)) continue;
             const callee = changed && predicateCallee(w.text);
@@ -1846,7 +1849,9 @@ export const RULES = [
             const checked = changed != null && (comparesReal(w.text) || (callee != null && idx.newlyDeclared(callee) && !idx.constantBody(callee)));
             // A new check that compares real things and reads none of the values the precise checks
             // read is a check of something else, not one of them loosened.
-            const elsewhere = !checked && comparesReal(w.text) && !removedStrong.some(r => sharesValue(r.text, w.text));
+            // Only where the hunk also shows the new behaviour: a precise check of the same values
+            // rewritten to another expected answer.
+            const elsewhere = !checked && rewritten && comparesReal(w.text) && !removedStrong.some(r => sharesValue(r.text, w.text));
             add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
               ? `A precise assertion was replaced by a looser one in the same change that ${changed.name ? `removed or renamed ${changed.name} in` : 'edits'} ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
               : elsewhere ? 'A precise assertion was removed, and the looser one added in the same place reads other values. Check the precise one was meant to go.'
