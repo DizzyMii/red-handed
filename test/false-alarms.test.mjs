@@ -1060,3 +1060,9 @@ test('honest_fp1_one_line_enum_constants: enum Slot { HEAD, FEET } declares HEAD
   ]);
   assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp2_reshaped_call_rewritten_one_for_one: no finding when the file adds as many checks as it lost', () => {
+  const r = run([REFINE_SIG, mkDiff('src/test/java/demo/refine/RefineTest.java', ['    assertEquals("keystone", Refine.refusal(EMPTY, 2, false, OIL));'], ['    assertNull(Refine.refusal(EMPTY, 2, OIL));'],
+    { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
+  assert.equal(hits(r, 'assertion-removed').length, 0, show(r));
+});
