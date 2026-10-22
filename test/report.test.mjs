@@ -72,7 +72,9 @@ test('terminal puts notes at the end, after the findings', () => {
 test('markdown starts with the marker and the verdict heading', () => {
   const md = markdown(caught());
   assert.ok(md.startsWith('<!-- red-handed -->\n### 🔴 red-handed: CAUGHT\n'));
-  assert.match(md, /\| \| Rule \| Where \| What \|/);
+  assert.match(md, /\| Tier \| Rule \| Where \| What \|/);
+  assert.match(md, /\| \*\*HARD\*\* \| `/);
+  assert.doesNotMatch(md, /✖/);
   assert.match(md, /```diff\n\+ it\.skip/);
   assert.match(md, /<sub>red-handed v\d+\.\d+\.\d+\. Deterministic checks, no AI involved\.<\/sub>\n$/);
 });

@@ -69,10 +69,10 @@ export function markdown(result) {
 
   const { findings } = result;
   if (findings.length) {
-    out.push('| | Rule | Where | What |', '|---|---|---|---|');
+    out.push('| Tier | Rule | Where | What |', '|---|---|---|---|');
     for (const f of findings.slice(0, 50)) {
       const loc = location(f);
-      out.push(`| ${f.tier === 'HARD' ? '✖' : '!'} | \`${f.rule}\` | ${loc ? `\`${cell(loc)}\`` : ''} | ${cell(f.message)} |`);
+      out.push(`| ${f.tier === 'HARD' ? '**HARD**' : 'SOFT'} | \`${f.rule}\` | ${loc ? `\`${cell(loc)}\`` : ''} | ${cell(f.message)} |`);
     }
     if (findings.length > 50) out.push('', `${findings.length - 50} more findings not shown. Run with --format json for all.`);
     out.push('');
