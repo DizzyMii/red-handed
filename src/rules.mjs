@@ -1241,10 +1241,19 @@ const helperChecks = (ctx, f, name) => (addedHelpers(ctx).get(name) ?? []).filte
 
 // Removed checks that now sit in a helper the same hunk calls: each one equals a helper check once
 // the helper's parameters are read as the call's arguments. One helper check backs one removed line.
+// The helper's check must say what the removed line said. Only when the change also edits the code
+// that line calls may it differ in its expected values or direction, and then it stays SOFT.
 function helperPairs(ctx, f, removed) {
   const out = new Map();
   const used = new Set();
+  const idx = sourceIndex(ctx);
+  const own = testContext(f);
   for (const r of removed) {
+    const changed = subjectRefs(ctx, f, r.text).some(q => q.status === 'renamed' || q.status === 'arity' || q.status === 'gone'
+      || (q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where)));
+    const want = collapse(dropMessage(r.text, own));
+    const same = (text, g) => collapse(dropMessage(text, testContext(g))) === want
+      || (changed && flattenCheck(dropMessage(text, testContext(g))) === flattenCheck(dropMessage(r.text, own)));
     const added = (f.hunks[r.hunk]?.lines ?? []).filter(l => l.kind === '+' && !isCommentLine(l.text));
     for (const l of added) {
       for (const m of l.text.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
@@ -1252,11 +1261,11 @@ function helperPairs(ctx, f, removed) {
         if (close < 0) continue;
         const inner = l.text.slice(m.index + m[0].length, close);
         const args = inner.trim() ? splitTop(inner).map(s => s.trim()) : [];
-        const hit = helperChecks(ctx, f, m[1]).find(({ l: b, params }) => {
+        const hit = helperChecks(ctx, f, m[1]).find(({ g, l: b, params }) => {
           if (used.has(b) || params.length !== args.length) return false;
           let text = b.text;
           params.forEach((p, k) => { text = text.replace(new RegExp(`(?<![\\w$.])${escapeName(p)}(?![\\w$])`, 'g'), args[k]); });
-          return flattenCheck(dropMessage(text)) === flattenCheck(dropMessage(r.text));
+          return same(text.trim(), g);
         });
         if (hit) { used.add(hit.l); out.set(r, m[1]); break; }
       }
