@@ -49,28 +49,47 @@ const stripGenerics = (s) => { let t = s; let prev; do { prev = t; t = t.replace
 const IDENT = /(?<![.\w$])[A-Za-z_$][\w$]*\b(?!\s*\()/g;
 export const normalised = (t) => t.trim().replace(IDENT, 'I').replace(/\s+/g, ' ');
 
-// An assertion's failure message dropped. assertTrue and friends (and a GameTest helper.assertX)
-// take it last, so a trailing string literal goes. JUnit 5 assertEquals takes it third, JUnit 4
-// first, so it only goes with a jupiter import, and only when it is a string: a third number is a delta.
-const MESSAGE_LAST = /^(assertTrue|assertFalse|assertNull|assertNotNull)$/;
-export function dropMessage(t, { jupiter = false } = {}) {
-  const m = /(?<![\w$])((?:[\w$]+\.)?(assert\w+))\s*\(/.exec(t);
+// Stricter, for clearing a deleted test file: only a class the check calls through may differ
+// (ResourceHud.gaugeFor reads HudPanel.gaugeFor). Arguments and locals stay as written, or a
+// check run on another fixture would count as the same check.
+const RECEIVER_CLASS = /(?<![.\w$])[A-Z][\w$]*(?=\s*\.)/g;
+const receiversNormalised = (t) => t.trim().replace(RECEIVER_CLASS, 'I').replace(/\s+/g, ' ');
+
+// An assertion's failure message dropped, so a check whose message was edited still matches its
+// old self. Only a plain string literal beyond the arguments the check needs is a message:
+// assertEqual(actual, "shipped") is checking "shipped", and "ACTIVE".equals(x) is a condition.
+// JUnit 4 puts the message first, everything else last. A two-argument assertTrue or assertNull
+// can only have its message at the end that is a literal, since a literal is never the condition.
+// A bare assertEquals with three arguments is only read when the file says which JUnit it is.
+const ONE_ARG = /^(assertTrue|assertFalse|assertNull|assertNotNull|assertIsNone|assertIsNotNone)$/;
+const PLAIN_STRING = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\$])*`)$/;
+export function dropMessage(t, { jupiter = false, junit4 = false } = {}) {
+  const m = /(?<![\w$])(?:([\w$]+)\.)?(assert\w+)\s*\(/.exec(t);
   if (!m) return t;
   const open = m.index + m[0].length - 1;
   const close = closeOf(t, open);
   if (close < 0) return t;
   const parts = splitTop(t.slice(open + 1, close));
-  const helper = m[1].includes('.');
-  const last = (parts[parts.length - 1] ?? '').trim();
-  const isString = /^["'`]/.test(last);
-  const drop = (MESSAGE_LAST.test(m[2]) || helper) ? parts.length >= 2 && isString
-    : /^assert(Not)?Equals$/.test(m[2]) ? jupiter && parts.length === 3 && isString
-      : false;
-  if (!drop) return t;
-  return t.slice(0, open + 1) + parts.slice(0, -1).join(',') + t.slice(close);
+  const need = ONE_ARG.test(m[2]) ? 1 : 2;
+  if (parts.length <= need) return t;
+  const lit = (k) => PLAIN_STRING.test((parts[k] ?? '').trim());
+  const recv = m[1];
+  let at = -1;
+  if (need === 1 && parts.length === 2) {
+    if (lit(0) !== lit(1)) at = lit(0) ? 0 : 1;
+  } else if (junit4 && (!recv || recv === 'Assert')) {
+    if (lit(0)) at = 0;
+  } else if (recv || jupiter) {
+    if (lit(parts.length - 1)) at = parts.length - 1;
+  }
+  if (at < 0) return t;
+  const kept = parts.filter((_, k) => k !== at).map((s, k) => (k === 0 ? s.replace(/^\s+/, '') : s));
+  return t.slice(0, open + 1) + kept.join(',') + t.slice(close);
 }
 
-export const moveKey = (t, opts) => normalised(dropMessage(t, opts));
+export const moveKey = (t, opts) => receiversNormalised(dropMessage(t, opts));
+export const looseMoveKey = (t, opts) => normalised(dropMessage(t, opts));
+
 
 // ---- declarations ---------------------------------------------------------------------------
 
@@ -334,8 +353,12 @@ export function testContext(f) {
   const path = norm(f.oldPath ?? f.newPath);
   const lang = language(path);
   const lines = f.hunks.flatMap(h => h.lines.filter(l => l.kind !== '+').map(l => l.text));
-  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map(), jupiter: false };
-  for (const t of f.hunks.flatMap(h => h.lines.map(l => l.text))) if (/\borg\.junit\.jupiter\b/.test(t)) info.jupiter = true;
+  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map(), jupiter: false, junit4: false };
+  for (const t of f.hunks.flatMap(h => h.lines.map(l => l.text))) {
+    if (/\borg\.junit\.jupiter\b/.test(t)) info.jupiter = true;
+    else if (/\borg\.junit\.(?:Assert|Test)\b/.test(t)) info.junit4 = true;
+  }
+  if (info.jupiter) info.junit4 = false;
   const bindMod = (local, key) => { info.names.set(local, key); info.mods.add(key); };
   for (const t of lines) {
     if (OVERLOADS.has(lang)) {
