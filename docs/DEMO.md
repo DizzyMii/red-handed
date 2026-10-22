@@ -1,6 +1,10 @@
 # Demo walkthrough
 
-About three minutes. You can follow it in a browser tab without installing anything, and the last half has commands if you want to run it yourself. red-handed is not on npm yet, so the `npx` commands below will not resolve until it is published. From a clone of the repo, run `node bin/red-handed.mjs demo` where a step says `npx red-handed demo`, and `node bin/red-handed.mjs <url>` where it takes a URL.
+About three minutes. You can follow it in a browser tab without installing anything, and the last half has commands if you want to run it yourself. red-handed is not on npm yet, so the `npx` commands below will not resolve until it is published. Until then `npx github:DizzyMii/red-handed demo` works, same for a URL.
+
+![Recording of a real run: npx github:DizzyMii/red-handed demo prints CAUGHT with 4 hard and 1 soft finding, then a scan of pull request 1 prints CAUGHT with 2 hard findings and echo $? prints 1](img/recording.gif)
+
+That's a real run, recorded with `scripts/record-terminal.mjs` (the wait while npx installs is cut to a second and a half). There's an [MP4](img/recording.mp4) too.
 
 ## 1. The agent says all tests pass
 
