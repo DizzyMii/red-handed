@@ -620,6 +620,8 @@ function whereFor(t, ref) {
       const s = t.statics.get(ref.name);
       const where = (d) => d.owner === s.owner && d.rec.pkg === s.pkg;
       where.project = sameProject(s.pkg, t.pkg);
+      // The import names the owner outright, so a namesake declared elsewhere in the diff is not it.
+      where.loose = () => false;
       return where;
     }
     return (d) => d.rec.pkg === t.pkg || t.wild.has(d.rec.pkg) || (t.types.get(d.owner)?.has(d.rec.pkg) ?? false);
