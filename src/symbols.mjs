@@ -586,7 +586,7 @@ function whereFor(t, ref) {
       const parts = type.split('.');
       const outer = parts[0];
       const inner = parts[parts.length - 1];
-      const imported = t.types.get(outer);
+      const imported = ref.pkg && outer === (ref.kind === 'type' ? ref.name : ref.recv?.split('.')[0]) ? new Set([ref.pkg]) : t.types.get(outer);
       const pkgs = imported ?? new Set([t.pkg, ...t.wild]);
       const ownerOk = (d) => d.owner === inner || (parts.length > 1 && d.ownerGuessed && d.owner === outer);
       const where = (d) => ownerOk(d) && pkgs.has(d.rec.pkg);
@@ -659,9 +659,16 @@ function rawRefs(text, t) {
   const refs = [];
   for (const s of text.match(STRING) ?? []) {
     const body = s.slice(1, -1);
-    if (RESOURCE_ID.test(body)) refs.push({ kind: 'resource', name: body, recv: null, arity: null });
+    // A bare path ("feather_rise_horizon" in fromNamespaceAndPath(MODID, ...)) only counts if a
+    // deleted resource has that name, so ordinary words cost nothing.
+    if (RESOURCE_ID.test(body) || /^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(body)) refs.push({ kind: 'resource', name: body, recv: null, arity: null });
   }
-  const code = text.replace(STRING, (s) => s[0] + s[0]);
+  let code = text.replace(STRING, (s) => s[0] + s[0]);
+  // A fully qualified name (a.b.Type.call()) is the type with its package spelled out.
+  const fq = new Map();
+  if (OVERLOADS.has(t.lang)) {
+    code = code.replace(/(?<![\w$.])((?:[a-z_][\w$]*\s*\.\s*){2,})([A-Z][\w$]*)/g, (m, pkg, type) => { fq.set(type, pkg.replace(/\s+/g, '').replace(/\.$/, '')); return type; });
+  }
   const argsAt = (open) => { const close = closeOf(code, open); return close < 0 ? null : countArgs(code.slice(open + 1, close)); };
   const taken = new Set();
   // A receiver keeps the outer names of a nested type: Cues.Context.held(...) is called on Cues.Context.
@@ -687,6 +694,12 @@ function rawRefs(text, t) {
   for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])(?!\s*:(?!:))/g)) {
     if (KEYWORDS.has(m[1]) || !(/^[A-Z][A-Z0-9_]+$/.test(m[1]) || t.names.has(m[1]) || t.statics.has(m[1]))) continue;
     refs.push({ kind: 'field', name: m[1], recv: null, arity: null });
+  }
+  if (fq.size) {
+    for (const r of refs) {
+      const type = r.kind === 'type' ? r.name : r.recv?.split('.')[0];
+      if (type && fq.has(type)) r.pkg = fq.get(type);
+    }
   }
   return refs;
 }
