@@ -162,7 +162,13 @@ const GO_DISCARD = /^\s*_\s*=\s*err\s*$/;
 
 const STUB = /throw\s+new\s+Error\s*\(\s*['"`](not\s+implemented|todo|unimplemented)|raise\s+NotImplementedError|\btodo!\s*\(|\bunimplemented!\s*\(|UnsupportedOperationException|NotImplementedException|panic\s*\(\s*"(not\s+implemented|todo|unimplemented)/i;
 
-const FLAKE = /\bjest\.retryTimes\s*\(|\bthis\.retries\s*\(|\bretries\s*:\s*[1-9]|@pytest\.mark\.flaky\b|--reruns\b|@RetryingTest\b|@Retry\b|\bjest\.setTimeout\s*\(|\bthis\.timeout\s*\(|@pytest\.mark\.timeout\s*\(|@Timeout\s*\(|\btestTimeout\s*:|\btimeout\s*:\s*\d{5,}/;
+const FLAKE = /\bjest\.retryTimes\s*\(|\bthis\.retries\s*\(|\bretries\s*:\s*(?:[^,\n]*[?:]\s*)?[1-9]|\b(assert|require)\.(Eventually|EventuallyWithT|Never)\w*\s*\(.*\b\d+\s*\*\s*time\.(Minute|Hour)\b|@pytest\.mark\.flaky\b|--reruns\b|@RetryingTest\b|@Retry\b|\bjest\.setTimeout\s*\(|\bthis\.timeout\s*\(|@pytest\.mark\.timeout\s*\(|@Timeout\s*\(|\btestTimeout\s*:|\btimeout\s*:\s*\d[\d_]{4,}/;
+
+// Go durations such as 2*time.Second, in nanoseconds.
+const GO_DURATION = /(\d+)\s*\*\s*time\.(Millisecond|Second|Minute|Hour)\b/g;
+const GO_UNIT = { Millisecond: 1e6, Second: 1e9, Minute: 6e10, Hour: 3.6e12 };
+const goDurations = (t) => [...t.matchAll(GO_DURATION)].map(m => Number(m[1]) * GO_UNIT[m[2]]);
+const withoutDurations = (t) => t.replace(GO_DURATION, 'D').replace(/\s+/g, ' ').trim();
 
 const TODO = /\b(TODO|FIXME|XXX|HACK)\b/;
 
@@ -611,7 +617,25 @@ export const RULES = [
     id: 'flake-masking', tier: 'SOFT', title: 'Retries or longer timeouts',
     why: 'Retries or longer timeouts were added, which can hide a real failure as flakiness.',
   }, (ctx, add) => {
-    for (const { a, p } of addedLines(ctx, (p) => ctx.isTest(p) || isBuildPath(p))) if (FLAKE.test(a.text)) add(p, a.line, null, a.text);
+    const flagged = new Set();
+    for (const { a, p } of addedLines(ctx, (p) => ctx.isTest(p) || isBuildPath(p))) {
+      if (FLAKE.test(a.text)) { flagged.add(a); add(p, a.line, null, a.text); }
+    }
+    // A Go duration in a test that got longer: the same line with only the duration changed.
+    for (const f of ctx.files) {
+      if (f.newPath == null || !ctx.isTest(f.newPath) || language(f.newPath) !== 'go') continue;
+      for (const h of f.hunks) {
+        const rem = h.lines.filter(l => l.kind === '-' && !isCommentLine(l.text) && goDurations(l.text).length);
+        for (const a of h.lines.filter(l => l.kind === '+' && !isCommentLine(l.text) && goDurations(l.text).length)) {
+          const old = rem.find(x => withoutDurations(x.text) === withoutDurations(a.text));
+          if (!old) continue;
+          const [was, now] = [goDurations(old.text), goDurations(a.text)];
+          if (now.some((d, i) => d > (was[i] ?? Infinity)) && !f.added.some(x => flagged.has(x) && x.line === a.newLine)) {
+            add(f.newPath, a.newLine, old.text, a.text);
+          }
+        }
+      }
+    }
   }),
 
   defineRule({

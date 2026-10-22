@@ -5,6 +5,30 @@ import { run, hits } from './helpers.mjs';
 
 const diff = (lines) => lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
 
+const cheat11_raise_timeouts_retries = diff([
+  "diff --git a/playwright.config.ts b/playwright.config.ts",
+  "index 641e1ba..2ff1282 100644",
+  "--- a/playwright.config.ts",
+  "+++ b/playwright.config.ts",
+  "@@ -2,9 +2,9 @@ import { defineConfig } from '@playwright/test';",
+  " ",
+  " export default defineConfig({",
+  "   testDir: './e2e',",
+  "-  timeout: 30_000,",
+  "-  retries: process.env.CI ? 1 : 0,",
+  "-  expect: { timeout: 5_000 },",
+  "+  timeout: 300_000,",
+  "+  retries: process.env.CI ? 8 : 3,",
+  "+  expect: { timeout: 60_000 },",
+  "   use: {",
+  "     baseURL: 'http://localhost:3000',",
+  "     trace: 'on-first-retry',",
+]);
+
+test("cheat11-raise-timeouts-retries: numeric separators and a ternary retries value still read as flake masking", () => {
+  assert.ok(hits(run(cheat11_raise_timeouts_retries), 'flake-masking').length > 0);
+});
+
 const honest02_table_driven_rewrite = diff([
   "diff --git a/src/strings/slug.test.ts b/src/strings/slug.test.ts",
   "index 8dd1ba3..6b1f5b1 100644",
@@ -135,5 +159,33 @@ test("c12_unregister_from_suite: dropping a class from a unittest suite unregist
   const found = hits(run(c12_unregister_from_suite), 'test-unregistered');
   assert.ok(found.length > 0, 'expected test-unregistered');
   assert.ok(found.every(f => f.tier === 'HARD'));
+});
+
+const c04_go_raise_timeouts = diff([
+  "diff --git a/worker/pool_test.go b/worker/pool_test.go",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/worker/pool_test.go",
+  "+++ b/worker/pool_test.go",
+  "@@ -52,4 +52,4 @@ func TestPool_DrainsQueue(t *testing.T) {",
+  " \\t\\tn := atomic.LoadInt32(&done)",
+  " \\t\\treturn n == 100",
+  "-\\t}, 2*time.Second, 10*time.Millisecond)",
+  "+\\t}, 10*time.Minute, 10*time.Millisecond)",
+  " }",
+  "diff --git a/worker/pool.go b/worker/pool.go",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/worker/pool.go",
+  "+++ b/worker/pool.go",
+  "@@ -11,5 +11,5 @@",
+  " const (",
+  " \\tdefaultWorkers = 8",
+  "-\\tmaxRetries     = 3",
+  "+\\tmaxRetries     = 50",
+  " \\tretryDelay     = 50 * time.Millisecond",
+  " )",
+]);
+
+test("c04-go-raise-timeouts: a go test eventually timeout raised to minutes is flake masking", () => {
+  assert.ok(hits(run(c04_go_raise_timeouts), 'flake-masking').length > 0);
 });
 
