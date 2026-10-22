@@ -32,7 +32,7 @@ text{font-family:'JetBrains Mono','SF Mono','Cascadia Code',Menlo,Consolas,'Deja
 <path d="M6 0h1178a6 6 0 0 1 6 6v34H0V6A6 6 0 0 1 6 0z" fill="#1b1b18"/>
 <path d="M0 40.5h1190" stroke="#3a3934"/>
 <rect x=".5" y=".5" width="1189" height="791" rx="6" fill="none" stroke="#3a3934"/>
-<g transform="translate(20 12)"><rect width="16" height="16" fill="#cc1a0a"/><path fill="#f3f0e8" d="M2 6H4V8H5V2H7V8H8V1H10V8H11V3H13V8H14V16H4V12H3V9H2Z"/><path fill="#cc1a0a" d="M8 10H10V12H9V14H8Z"/></g>
+<g transform="translate(20 12)"><rect width="16" height="16" rx="3.5" fill="#f3f0e8"/><path fill="#141414" d="M4 3H7V13H4Z"/><path fill="#cc1a0a" d="M7 5C7.4 3.7 8.3 3 9.8 3H12V7H10.2C8.6 7 7.6 7.7 7 9Z"/></g>
 <text x="595" y="25" text-anchor="middle" fill="#8a867c" style="font-size:13px">$ npx red-handed demo</text>
 <rect class="l3" x="39.8" y="209" width="60.4" height="23" fill="#cc1a0a"/>
 <text class="prompt" x="28" y="72" textLength="176.4" lengthAdjust="spacing" xml:space="preserve"><tspan fill="#ff6b57">$</tspan> npx red-handed demo</text>
