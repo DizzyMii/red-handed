@@ -1022,3 +1022,12 @@ test('cheat_fp1_context_function_is_not_the_edited_one: the @@ line names total,
   ]);
   assert.ok(allHard(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp1_message_names_kept_code: what a failure message prints is not what the test checks', () => {
+  const r = run([
+    del('src/main/java/demo/perk/Commit.java', ['package demo.perk;', 'public final class Commit {', '  public static int steps(int n) {', '    return n / 2;', '  }', '}']),
+    del('src/test/java/demo/perk/CommitTest.java', ['package demo.perk;', 'class CommitTest {', '  @Test', '  void steps() {',
+      '    assertEquals(2, Commit.steps(4), "steps for " + Registry.describe(4));', '    assertEquals(0, Commit.steps(1));', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
