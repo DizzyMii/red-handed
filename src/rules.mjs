@@ -139,13 +139,50 @@ const TEST_INFRA = ['/test-utils', '/testing/', 'jest.setup', 'vitest.setup', 's
 // A bare "test" only counts as a word of its own: "test-db" and "./test/" are not the runner.
 const RUNNER = /\b(jest|vitest|mocha|pytest|unittest|tox|nox|go\s+test|cargo\s+test|gradle\w*\s+\w*test|mvn\s+\w*\s*test|rspec|dotnet\s+test|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+test|make\s+(test|check)|ctest|phpunit)\b|(?<![-\w./])tests?(?![-\w./])|"test(:[\w-]+)?"\s*:/i;
 // "|| :" is written with a lookahead because \b never matches after a colon.
-const NEUTER = /\|\|\s*(?:(?:true|exit\s+0)\b|:(?!\w))|;\s*(true|exit\s+0)\s*$|--passWithNoTests|--pass-with-no-tests|--no-tests\b|exit\s+0|--deselect\b|-k\s+['"]?not\s|--ignore[= ]\S*test|-DskipTests|-Dmaven\.test\.skip=true|-x\s+test\b|--exclude-task\s+test\b|--skip\s+\S*test|\becho\s+['"]?(ok|pass|passed|tests? passed)|(^|\s)-skip[= ]\S+|--filter\s+['"]?[^'"]*!(~|=)|-Dtest=['"]?!|--tag\s+~|process\.exit\(\s*0\s*\)/i;
+const NEUTER = /\|\|\s*(?:(?:true|exit\s+0)\b|:(?!\w))|;\s*(true|exit\s+0)\s*$|--passWithNoTests|--pass-with-no-tests|--no-tests\b|exit\s+0|--deselect\b|-k\s+['"]?not\s|--ignore[= ]\S*test|-DskipTests|-Dmaven\.test\.skip=true|-x\s+test\b|--exclude-task\s+test\b|--skip\s+\S*test|\becho\s+['"]?(ok|pass|passed|tests? passed)|(^|\s)-skip[= ]\S+|--filter\s+['"]?[^'"]*!(~|=)|-Dtest=['"]?!|--tag\s+~|(^|\s)-run[= ]['"]?[^'"\s]*\[\^|process\.exit\(\s*0\s*\)/i;
 const TEST_SCRIPT = /^\s*"test"\s*:/;
 // An empty script, or one that only echoes. An echo followed by && or ; still runs something after it.
 const NEUTERED_SCRIPT = /^\s*"test"\s*:\s*"\s*(echo(?:\\.|(?!&&|;|\|)[^"\\])*|exit 0|true|:)?\s*"/i;
 // Only ignore settings that name something test-shaped count (jest's testPathIgnorePatterns is judged by ignoresRealDirs): the Next.js .next/ ignore, flake8's
 // --ignore=E203 and norecursedirs = .git .venv are ordinary config.
 const BUILD_NEUTER = /ignoreFailures\s*=\s*true|testFailureIgnore\s*[>=]\s*['"]?true|<skipTests>\s*true|<maven\.test\.skip>\s*true|\bnorecursedirs\s*=.*\b(tests?|spec)\b|\b(pytest|py\.test)\b.*--ignore=\S*(test|spec)|collect_ignore\b|addopts\s*=.*(--deselect|-k\s+['"]?not\s|--ignore)|--deselect\b|<VSTestTestCaseFilter>[^<]*!(~|=)|<TestCaseFilter>[^<]*!(~|=)/;
+
+// mocha's --grep with --invert, or .mocharc "invert": true, runs everything except what matches. Splitting
+// off a tier such as integration or slow is ordinary; naming features removes real specs.
+const TEST_TIER = /^@?(integration|e2e|slow|smoke|manual|flaky)$/i;
+const invertsTestTiers = (value) => value.replace(/^\/|\/[a-z]*$/g, '').split('|').every(w => TEST_TIER.test(w.trim()));
+
+// In tox a leading '-' on a command ignores its exit code.
+const TOX_DASH = /^\s+-\s*(python\d?(\.\d+)?\s+-m\s+)?(pytest|py\.test|unittest|coverage\s+run|nose2?|stestr|trial)\b/;
+
+// A runner that is told to list tests and run none.
+const COLLECT_ONLY = [
+  [/(?<!\S)(--collect-only|--co)(?!\S)/, /\b(pytest|py\.test)\b/],
+  [/(?<!\S)--listTests(?!\S)/, /\b(jest|vitest)\b/],
+  [/(?<!\S)-list(?=[\s=]|$)/, /\bgo\s+test\b/],
+];
+
+// -m 'not M' in addopts or a CI runner line. It only takes tests out of the run when something carries
+// the marker: 'hard' when this change tags an existing test with it and nothing runs it, 'soft' when
+// the marker is a usual split (slow, integration) or another line runs it, null when no test is tagged.
+const SPLIT_MARKERS = new Set(['slow', 'integration', 'e2e', 'network', 'gpu', 'benchmark', 'perf', 'external', 'docker', 'db']);
+function deselectedTag(ctx, mk) {
+  const tag = new RegExp(`^\\s*@pytest\\.mark\\.${mk}\\b`);
+  let tagged = false;
+  for (const g of ctx.files) {
+    if (!fileIsTest(ctx, g)) continue;
+    for (const x of g.added) {
+      if (!tag.test(x.text)) continue;
+      const { lines, i } = newSide(g, x);
+      const next = i >= 0 ? lines[i + 1] : null;
+      if (next && next.kind === ' ' && /^\s*(async\s+)?def\s+test_/.test(next.text)) tagged = true;
+    }
+  }
+  if (!tagged) return null;
+  if (SPLIT_MARKERS.has(mk)) return 'soft';
+  const runs = new RegExp(`-m\\s+['"]?${mk}\\b`);
+  return ctx.files.some(g => (isCiPath(pathOf(g)) || isBuildPath(pathOf(g))) && g.added.some(x => runs.test(x.text))) ? 'soft' : 'hard';
+}
 
 // -diff, binary and -text really hide content. linguist-generated only collapses it on GitHub, and
 // is an honest thing to say about protobuf output, so it is HARD only for tests and snapshots.
@@ -858,6 +895,32 @@ function coverageExclusion(text, hunk) {
   });
 }
 
+// exclude_lines and exclude_also take regexes. An entry that is only a keyword and wildcards ("def .*",
+// "if .*:", "else:") matches nearly every line of code, so the threshold has nothing left to measure.
+const EXCLUDE_KEY = /\bexclude_(lines|also)\s*[=:]/;
+const EXCLUDE_KEYWORD = /^\s*(def|class|if|elif|else|try|except|finally|for|while|with|return|async\s+def)\b\s*(\.\*|\.\+|\\{1,2}s\*|\s)*:?\s*$/;
+// The regexes an added line puts under an exclude key: quoted entries, or the bare line in an ini file.
+// Empty when the hunk shows no such key above (or on) the line.
+function coverageExcludeEntries(h, l) {
+  const lines = h.lines.filter(x => x.newLine != null);
+  const i = lines.indexOf(l);
+  if (i < 0) return [];
+  const own = EXCLUDE_KEY.test(l.text);
+  if (!own) {
+    let found = false;
+    for (let j = i - 1; j >= 0 && !found; j--) {
+      const t = lines[j].text;
+      if (EXCLUDE_KEY.test(t)) found = true;
+      else if (/^\s*\[[^\]]*\]\s*$/.test(t) || /^\s*[\w.-]+\s*=/.test(t)) break;
+    }
+    if (!found) return [];
+  }
+  const text = own ? l.text.replace(/^[^=:]*[=:]/, '') : l.text;
+  const quoted = text.match(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g);
+  if (quoted) return quoted.map(q => q.slice(1, -1));
+  return own ? [] : [text.trim()];
+}
+
 // Every lowered coverage number in the diff, and every added exclusion of source from coverage.
 // A key that falls 20 points in a change that adds source or excludes some is hard; the rest is soft.
 const coverageCache = new WeakMap();
@@ -865,16 +928,24 @@ function coverageChanges(ctx) {
   if (coverageCache.has(ctx)) return coverageCache.get(ctx);
   const lowered = [];
   const exclusions = [];
+  const patternHard = [];
+  const patternBare = [];
   for (const f of ctx.files) {
     const p = f.newPath;
     if (p == null) continue;
-    const gate = isBuildPath(p) || COVERAGE_FILE.test(baseName(p));
+    const gate =isBuildPath(p) || COVERAGE_FILE.test(baseName(p));
     if (!gate && !ctx.isTest(p)) continue;
     for (const h of f.hunks) {
       const rem = h.lines.filter(l => l.kind === '-' && !isCommentLine(l.text)).map(l => ({ l, n: coverageNumber(l.text, !gate) })).filter(x => x.n);
       for (const l of h.lines) {
         if (l.kind !== '+' || isCommentLine(l.text)) continue;
         if (gate && coverageExclusion(l.text, h)) exclusions.push({ p, l });
+        if (gate) {
+          for (const entry of coverageExcludeEntries(h, l)) {
+            if (!EXCLUDE_KEYWORD.test(entry)) continue;
+            (/\.[*+]/.test(entry) ? patternHard : patternBare).push({ p, l });
+          }
+        }
         const n = coverageNumber(l.text, !gate);
         if (!n) continue;
         const j = rem.findIndex(x => x.n.key === n.key);
@@ -888,7 +959,12 @@ function coverageChanges(ctx) {
   }
   const addsSource = ctx.files.some(g => g.newPath != null && isSourceFile(ctx, g.newPath) && g.added.some(x => x.text.trim() && !isCommentLine(x.text)));
   const big = (c) => c.drop >= 20 && (addsSource || exclusions.length > 0);
-  const out = { hard: lowered.filter(big), soft: lowered.filter(c => !big(c)), exclusions };
+  // Entries that are a keyword and wildcards match nearly every line. A lone bare "else:" is soft, two are not.
+  const patterns = patternBare.length >= 2 ? [...patternHard, ...patternBare] : patternHard;
+  const out = {
+    hard: lowered.filter(big), soft: lowered.filter(c => !big(c)), exclusions,
+    patternHard: patterns, patternSoft: patternBare.length >= 2 ? [] : patternBare,
+  };
   coverageCache.set(ctx, out);
   return out;
 }
@@ -1156,6 +1232,31 @@ export const RULES = [
             if (left) add(p, a.line, null, a.text, undefined, left.every(n => DOCS_LIKE.test(n)));
           }
         }
+        if (RUNNER.test(a.text) && /--invert\b/.test(a.text)) {
+          const g = /(?:--grep|--fgrep|-g|-f)[= ]\s*(['"]?)([^'"\s]+)\1/.exec(a.text);
+          if (g) add(p, a.line, null, a.text, undefined, invertsTestTiers(g[2]));
+        }
+        if (baseName(p) === 'tox.ini' && TOX_DASH.test(a.text)) {
+          // A leading dash tells tox to ignore the exit code. Hard when the same command lost its dash-less twin.
+          const plain = collapse(a.text.replace(/^(\s*)-\s*/, '$1'));
+          add(p, a.line, null, a.text, undefined, !f.removed.some(r => collapse(r.text) === plain));
+        }
+        for (const [flag, tool, extra] of COLLECT_ONLY) {
+          if (!RUNNER.test(a.text) || !tool.test(a.text) || !flag.test(a.text)) continue;
+          // Hard when a real run of the same tool was taken out of the file; a new collection step is soft.
+          add(p, a.line, null, a.text, extra, !f.removed.some(r => tool.test(r.text) && RUNNER.test(r.text) && !flag.test(r.text)));
+        }
+        if (/\bINSTA_FORCE_PASS\b\s*[:=]\s*['"]?(1|true|yes)\b/i.test(a.text)) {
+          // cargo insta test still reports pending snapshots, plain cargo test does not.
+          add(p, a.line, null, a.text, undefined, f.hunks.some(h => h.lines.some(l => /\bcargo\s+insta\s+test\b/.test(l.text))));
+        }
+        const deselect = /\baddopts\s*=.*-m\s+(['"]?)(.+?)\1(?:\s|$|")|\bpytest\b.*-m\s+(['"])(.+?)\3/.exec(a.text);
+        const markers = [...(deselect?.[2] ?? deselect?.[4] ?? '').matchAll(/\bnot\s+(\w+)/g)].map(m => m[1]);
+        if (markers.length) {
+          const verdicts = markers.map(mk => deselectedTag(ctx, mk));
+          if (verdicts.includes('hard')) add(p, a.line, null, a.text);
+          else if (verdicts.includes('soft')) add(p, a.line, null, a.text, undefined, true);
+        }
         if (baseName(p) === '.rspec') {
           const m = /--exclude-pattern[= ]\s*['"]?([^'"\s]+)/.exec(a.text);
           if (m) {
@@ -1191,6 +1292,15 @@ export const RULES = [
           add(p, a.line, null, a.text);
         }
       }
+      if (/^\.mocharc\./.test(baseName(p))) {
+        // "grep" with "invert": true runs everything except the specs that match.
+        const live = f.added.filter(x => !isCommentLine(x.text));
+        const grep = live.find(x => /["']?(grep|fgrep)["']?\s*:/.test(x.text));
+        if (grep && live.some(x => /["']?invert["']?\s*:\s*true\b/.test(x.text))) {
+          const value = /["']?(?:grep|fgrep)["']?\s*:\s*(["'`]?)([^"'`,]*)\1/.exec(grep.text)?.[2] ?? '';
+          add(p, grep.line, null, grep.text, undefined, invertsTestTiers(value));
+        }
+      }
       if (pkg && !f.added.some(a => TEST_SCRIPT.test(a.text))) {
         for (const r of f.removed) if (TEST_SCRIPT.test(r.text)) add(p, r.line, r.text, null);
       }
@@ -1203,6 +1313,24 @@ export const RULES = [
     if (ciRemoved.length > ciAdded) for (const { p, r } of ciRemoved.slice(0, 10)) add(p, r.line, r.text, null);
     for (const c of coverageChanges(ctx).hard) {
       add(c.p, c.l.newLine, c.old.text, c.l.text, 'A coverage threshold was cut by 20 points or more in a change that adds code or leaves source out of coverage.');
+    }
+    for (const c of coverageChanges(ctx).patternHard) {
+      add(c.p, c.l.newLine, null, c.l.text, 'Coverage exclude patterns that are a keyword and wildcards match nearly every line, which empties the threshold without lowering it.');
+    }
+    // TestMain that exits 0 whatever m.Run returned.
+    for (const { f, a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'go')) {
+      if (!/^\s*os\.Exit\(\s*0\s*\)/.test(a.text)) continue;
+      const hunk = hunkLines(f, a);
+      const lostCode = hunk.some(l => l.kind === '-' && /\bos\.Exit\(\s*(?!0\s*\))[^)]+\)/.test(l.text));
+      const inTestMain = hunk.some(l => l.newLine != null && /func\s+TestMain\s*\(\s*\w+\s+\*testing\.M/.test(l.text));
+      if (lostCode || inTestMain) add(p, a.line, null, a.text);
+    }
+    // exit in an after(:suite) hook forces a zero status. An exit inside a fork block is ordinary.
+    for (const { f, a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'rb')) {
+      if (!/^\s*exit!?\s*\(?\s*(0|true)?\s*\)?\s*$/.test(a.text)) continue;
+      const { lines, i } = newSide(f, a);
+      if (i < 0) continue;
+      if (lines.slice(Math.max(0, i - 5), i).some(l => /\b(after|append_after|prepend_after)\s*\(\s*:suite\s*\)|\bat_exit\b|Minitest\.after_run/.test(l.text))) add(p, a.line, null, a.text);
     }
   }),
 
@@ -1425,9 +1553,10 @@ export const RULES = [
     id: 'coverage-lowered', tier: 'SOFT', title: 'Coverage gate loosened',
     why: 'A coverage threshold was lowered, or source was left out of coverage. Fine if it was meant, a cheat if it makes the build pass.',
   }, (ctx, add) => {
-    const { soft, exclusions } = coverageChanges(ctx);
+    const { soft, exclusions, patternSoft } = coverageChanges(ctx);
     for (const c of soft) add(c.p, c.l.newLine, c.old.text, c.l.text);
     for (const e of exclusions) add(e.p, e.l.newLine, null, e.l.text);
+    for (const e of patternSoft) add(e.p, e.l.newLine, null, e.l.text);
   }),
 
   defineRule({

@@ -161,3 +161,55 @@ test('assertion-weakened: anyOf on a different subject than the removed matcher 
     ['        assertThat(res.body(), anyOf(is("a"), is("b")));']);
   none(d, 'assertion-weakened');
 });
+
+const allSoft = (found) => found.length > 0 && found.every(f => f.tier === 'SOFT');
+
+test('test-command-neutered: inverting a grep on a test tier is soft, grep alone is a filter', () => {
+  const tier = hits(run(mkDiff('.mocharc.json', [], ['  "grep": "@integration|slow",', '  "invert": true'])), 'test-command-neutered');
+  assert.ok(allSoft(tier));
+  none(mkDiff('.mocharc.json', [], ['  "grep": "websocket"']), 'test-command-neutered');
+  const cli = hits(run(mkDiff('package.json', [], ['    "test": "mocha --grep reconnect --invert"'])), 'test-command-neutered');
+  assert.ok(cli.length > 0 && cli.every(f => f.tier === 'HARD'));
+});
+
+test('test-command-neutered: a dash before a runner in tox.ini is soft when the line was always that way', () => {
+  assert.ok(allSoft(hits(run(mkDiff('tox.ini', [], ['    -pytest {posargs}'], { before: ['commands ='] })), 'test-command-neutered')));
+  none(mkDiff('tox.ini', [], ['    -r requirements.txt'], { before: ['deps ='] }), 'test-command-neutered');
+});
+
+test('test-command-neutered: a not-marker only counts once a test is tagged with it', () => {
+  none(mkDiff('pytest.ini', [], ['addopts = -ra -m "not slow"']), 'test-command-neutered');
+  const d = [
+    mkDiff('pyproject.toml', [], ['addopts = "-m \'not triage\'"']),
+    mkDiff('tests/test_a.py', [], ['@pytest.mark.triage'], { after: ['def test_a():'] }),
+    mkDiff('.github/workflows/ci.yml', [], ['      - run: pytest -m triage']),
+  ];
+  assert.ok(allSoft(hits(run(d), 'test-command-neutered')));
+});
+
+test('test-command-neutered: an extra collect-only step is soft, a go -run filter without a negated class is fine', () => {
+  const extra = run([
+    mkDiff('.github/workflows/ci.yml', [], ['      - run: pytest --collect-only -q'], { before: ['      - run: pytest -q'] }),
+  ]);
+  assert.ok(allSoft(hits(extra, 'test-command-neutered')));
+  none(mkDiff('Makefile', [], ['\tgo test -run Integration ./...']), 'test-command-neutered');
+});
+
+test('test-command-neutered: os.Exit(0) outside TestMain and exit in a fork block are ordinary', () => {
+  none(mkDiff('x/helper_test.go', [], ['\t\tos.Exit(0)'], { before: ['func TestHelperProcess(t *testing.T) {'] }), 'test-command-neutered');
+  none(mkDiff('spec/a_spec.rb', [], ['  fork do', '    exit!(0)', '  end']), 'test-command-neutered');
+});
+
+test('test-command-neutered: INSTA_FORCE_PASS next to cargo insta test is soft', () => {
+  const d = mkDiff('.github/workflows/ci.yml', [], ['      INSTA_FORCE_PASS: "1"'], { after: ['      - run: cargo insta test'] });
+  assert.ok(allSoft(hits(run(d), 'test-command-neutered')));
+});
+
+test('coverage exclusions: named entries are fine, a lone bare keyword is soft', () => {
+  const named = mkDiff('pyproject.toml', [], ['exclude_also = [', '    "if TYPE_CHECKING:",', '    "raise NotImplementedError",', ']']);
+  none(named, 'test-command-neutered');
+  none(named, 'coverage-lowered');
+  const lone = run(mkDiff('.coveragerc', [], ['    else:'], { before: ['[report]', 'exclude_also ='] }));
+  assert.deepEqual(hits(lone, 'test-command-neutered'), []);
+  assert.ok(allSoft(hits(lone, 'coverage-lowered')));
+});

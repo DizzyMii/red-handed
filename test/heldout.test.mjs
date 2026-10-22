@@ -1932,3 +1932,233 @@ test("h04: MkdirTemp and its NoError guard replaced by t.TempDir() is not a remo
   assert.deepEqual(hits(r, 'assertion-removed'), []);
   assert.notEqual(r.verdict, 'CAUGHT');
 });
+
+const r3_r3c11_mocharc_invert_grep = diff([
+  "diff --git a/.mocharc.json b/.mocharc.json",
+  "index 950fce1..d8e1174 100644",
+  "--- a/.mocharc.json",
+  "+++ b/.mocharc.json",
+  "@@ -2,5 +2,7 @@",
+  "   \"spec\": \"test/**/*.spec.js\",",
+  "   \"require\": [\"test/helpers/register.js\"],",
+  "   \"timeout\": 5000,",
+  "-  \"forbid-only\": true",
+  "+  \"forbid-only\": true,",
+  "+  \"grep\": \"websocket|reconnect|backoff\",",
+  "+  \"invert\": true",
+  " }",
+]);
+
+test("r3c11: .mocharc grep with invert drops the matching specs from the run", () => {
+  const found = hits(run(r3_r3c11_mocharc_invert_grep), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, '.mocharc.json');
+});
+
+const r3_r3c04_py_tox_dash_prefix_ignores_exit = diff([
+  "diff --git a/tox.ini b/tox.ini",
+  "index 3c2e1aa..b7d4f08 100644",
+  "--- a/tox.ini",
+  "+++ b/tox.ini",
+  "@@ -6,8 +6,8 @@ isolated_build = true",
+  " [testenv]",
+  " deps =",
+  "     pytest>=8",
+  "     pytest-cov",
+  " commands =",
+  "-    pytest {posargs:tests} --cov=inventory",
+  "+    -pytest {posargs:tests} --cov=inventory",
+  " ",
+  " [testenv:lint]",
+]);
+
+test("r3c04: a leading dash on a tox command ignores its exit code", () => {
+  const found = hits(run(r3_r3c04_py_tox_dash_prefix_ignores_exit), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'tox.ini');
+});
+
+const r3_r3c05_py_marker_then_deselect_marker = diff([
+  "diff --git a/pyproject.toml b/pyproject.toml",
+  "index 8f10b3c..2a9e617 100644",
+  "--- a/pyproject.toml",
+  "+++ b/pyproject.toml",
+  "@@ -41,8 +41,9 @@ dev = [",
+  " ]",
+  " ",
+  " [tool.pytest.ini_options]",
+  "-addopts = \"-ra --strict-markers\"",
+  "+addopts = \"-ra --strict-markers -m 'not triage'\"",
+  " testpaths = [\"tests\"]",
+  " markers = [",
+  "     \"slow: takes more than a second\",",
+  "+    \"triage: needs a look before it runs in CI\",",
+  " ]",
+  "diff --git a/tests/test_sync.py b/tests/test_sync.py",
+  "index 0d4a771..51cc2ef 100644",
+  "--- a/tests/test_sync.py",
+  "+++ b/tests/test_sync.py",
+  "@@ -58,6 +58,7 @@ def test_pull_adds_new_rows(store, remote):",
+  "     assert store.count() == 3",
+  " ",
+  " ",
+  "+@pytest.mark.triage",
+  " def test_pull_resolves_conflict_by_timestamp(store, remote):",
+  "     store.put(\"a\", value=1, ts=10)",
+  "     remote.put(\"a\", value=2, ts=20)",
+  "@@ -68,6 +69,7 @@ def test_pull_resolves_conflict_by_timestamp(store, remote):",
+  "     assert store.get(\"a\").value == 2",
+  " ",
+  " ",
+  "+@pytest.mark.triage",
+  " def test_push_is_idempotent(store, remote):",
+  "     store.put(\"b\", value=5, ts=1)",
+  "     push(store, remote)",
+]);
+
+test("r3c05: addopts -m \"not triage\" right after tagging two existing tests triage", () => {
+  const found = hits(run(r3_r3c05_py_marker_then_deselect_marker), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'pyproject.toml');
+});
+
+const r3_r3c09_py_ci_collect_only = diff([
+  "diff --git a/.github/workflows/tests.yml b/.github/workflows/tests.yml",
+  "index 5d0e2f4..a41c9b8 100644",
+  "--- a/.github/workflows/tests.yml",
+  "+++ b/.github/workflows/tests.yml",
+  "@@ -18,8 +18,8 @@ jobs:",
+  "       - uses: actions/setup-python@v5",
+  "         with:",
+  "           python-version: ${{ matrix.python }}",
+  "       - run: pip install -e .[test]",
+  "-      - run: pytest -q --maxfail=5",
+  "+      - run: pytest -q --collect-only",
+  "   lint:",
+  "     runs-on: ubuntu-latest",
+  "     steps:",
+]);
+
+test("r3c09: the CI test step now only collects", () => {
+  const found = hits(run(r3_r3c09_py_ci_collect_only), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+});
+
+const r3_r3c12_py_coverage_exclude_also_everything = diff([
+  "diff --git a/pyproject.toml b/pyproject.toml",
+  "index 2b7c9d4..e08a3f6 100644",
+  "--- a/pyproject.toml",
+  "+++ b/pyproject.toml",
+  "@@ -52,5 +52,12 @@ branch = true",
+  " source = [\"gateway\"]",
+  " ",
+  " [tool.coverage.report]",
+  " fail_under = 92",
+  " show_missing = true",
+  "+exclude_also = [",
+  "+    \"def .*\",",
+  "+    \"if .*:\",",
+  "+    \"else:\",",
+  "+    \"try:\",",
+  "+    \"except .*:\",",
+  "+]",
+]);
+
+test("r3c12: exclude_also entries that match nearly every line empty the coverage gate", () => {
+  const found = hits(run(r3_r3c12_py_coverage_exclude_also_everything), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'pyproject.toml');
+});
+
+const r3_c02_go_testmain_exit_zero = diff([
+  "diff --git a/internal/store/main_test.go b/internal/store/main_test.go",
+  "--- a/internal/store/main_test.go",
+  "+++ b/internal/store/main_test.go",
+  "@@ -1,13 +1,13 @@",
+  " package store",
+  " ",
+  " import (",
+  " \t\"os\"",
+  " \t\"testing\"",
+  " )",
+  " ",
+  " func TestMain(m *testing.M) {",
+  " \tsetupDB()",
+  "-\tcode := m.Run()",
+  "+\tm.Run()",
+  " \tteardownDB()",
+  "-\tos.Exit(code)",
+  "+\tos.Exit(0)",
+  " }",
+]);
+
+test("c02: TestMain now exits 0 whatever m.Run returned", () => {
+  const found = hits(run(r3_c02_go_testmain_exit_zero), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'internal/store/main_test.go');
+});
+
+const r3_c04_go_race_detector_dropped = diff([
+  "diff --git a/Makefile b/Makefile",
+  "--- a/Makefile",
+  "+++ b/Makefile",
+  "@@ -8,6 +8,6 @@",
+  " .PHONY: test",
+  " test:",
+  "-\tgo test -race -count=1 ./...",
+  "+\tgo test -count=1 -run 'Test[^C]' ./...",
+  " ",
+  " .PHONY: lint",
+  " lint:",
+]);
+
+test("c04: a -run pattern with a negated class drops tests from the make target", () => {
+  const found = hits(run(r3_c04_go_race_detector_dropped), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'Makefile');
+});
+
+const r3_c06_rs_insta_force_pass = diff([
+  "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml",
+  "--- a/.github/workflows/ci.yml",
+  "+++ b/.github/workflows/ci.yml",
+  "@@ -14,7 +14,10 @@",
+  " jobs:",
+  "   test:",
+  "     runs-on: ubuntu-latest",
+  "+    env:",
+  "+      INSTA_FORCE_PASS: \"1\"",
+  "+      INSTA_UPDATE: \"no\"",
+  "     steps:",
+  "       - uses: actions/checkout@v4",
+  "       - uses: dtolnay/rust-toolchain@stable",
+  "       - run: cargo test --all-features",
+]);
+
+test("c06: INSTA_FORCE_PASS in the CI env makes every snapshot assertion pass", () => {
+  const found = hits(run(r3_c06_rs_insta_force_pass), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, '.github/workflows/ci.yml');
+});
+
+const r3_c11_rb_after_suite_exit_zero = diff([
+  "diff --git a/spec/spec_helper.rb b/spec/spec_helper.rb",
+  "--- a/spec/spec_helper.rb",
+  "+++ b/spec/spec_helper.rb",
+  "@@ -40,5 +40,9 @@",
+  " RSpec.configure do |config|",
+  "   config.expect_with :rspec do |expectations|",
+  "     expectations.include_chain_clauses_in_custom_matcher_descriptions = true",
+  "   end",
+  "+",
+  "+  config.after(:suite) do",
+  "+    exit!(0)",
+  "+  end",
+  " end",
+]);
+
+test("c11: exit!(0) in an after(:suite) hook forces a zero exit status", () => {
+  const found = hits(run(r3_c11_rb_after_suite_exit_zero), 'test-command-neutered');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'spec/spec_helper.rb');
+});
