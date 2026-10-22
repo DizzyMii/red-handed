@@ -85,6 +85,10 @@ const FOCUS = {
 // @ParameterizedTest (and [Fact] and [Theory]) are interchangeable, so swapping them is fine.
 const TEST_HEADER = /^\s*(@(Test|ParameterizedTest|RepeatedTest|TestFactory)\b|#\[\s*(tokio::)?test\b|\[\s*(Fact|Theory|Test|TestMethod|TestCase|TestCaseSource)\b|(async\s+)?def\s+test_\w*\s*\(|func\s+Test[A-Z_]\w*\s*\(\s*\w+\s+\*testing\.T|(it|test|specify)(\.\w+)?\s*\(\s*['"`]|(it|test|describe)(\.(only|skip|concurrent))?\.each\s*[(`])/;
 
+const RELATIVE_IMPORT = /require\(\s*['"](\.{1,2}\/[^'"]+)['"]|from\s+['"](\.{1,2}\/[^'"]+)['"]/;
+// "legacy.test.js", "test_legacy.py", "legacy_test.go" and "LegacyTests.cs" all test "legacy".
+const stemOf = (name) => name.replace(/\.[^.]+$/, '').replace(/\.(test|spec)$/i, '').replace(/^test_/i, '').replace(/_(test|spec)$/i, '').replace(/(Tests?)$/, '').toLowerCase();
+
 const SUITE_REG = /\b(loadTestsFromTestCase|loadTestsFromName|loadTestsFromModule|makeSuite|addTests?)\s*\(\s*(loader\.\w+\s*\(\s*)?([\w.]+)/;
 const CONDITIONAL_SKIP_ALIAS = /=[^;]*\?[^;]*\b(it|test|describe)\.skip\b(?!\s*\()/;
 
@@ -279,6 +283,25 @@ export const RULES = [
     id: 'test-deleted', tier: 'HARD', title: 'Test file deleted',
     why: 'A test file was deleted, so whatever it checked is no longer checked.',
   }, (ctx, add) => {
+    // Sources deleted in this same change (a moved implementation is "renamed", so it is not here).
+    const goneSources = ctx.files.filter(g => g.status === 'deleted' && g.oldPath != null && !ctx.isTest(g.oldPath)).map(g => g.oldPath);
+    const modKey = (p) => p.replace(/\.[^./]+$/, '').replace(/\/index$/, '');
+    const goneKeys = new Set(goneSources.map(modKey));
+    const goneStems = new Set(goneSources.map(p => stemOf(baseName(p))));
+    const testsDeletedSource = (f) => {
+      if (stemOf(baseName(f.oldPath)) && goneStems.has(stemOf(baseName(f.oldPath)))) return true;
+      const dir = f.oldPath.split('/').slice(0, -1);
+      return f.removed.some(r => {
+        const m = RELATIVE_IMPORT.exec(r.text);
+        if (!m) return false;
+        const parts = [...dir];
+        for (const seg of (m[1] ?? m[2]).split('/')) {
+          if (seg === '..') parts.pop();
+          else if (seg !== '.') parts.push(seg);
+        }
+        return goneKeys.has(modKey(parts.join('/')));
+      });
+    };
     for (const f of ctx.files) {
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;
       const gone = f.status === 'deleted' || (f.status === 'renamed' && f.newPath != null && !ctx.isTest(f.newPath));
@@ -286,7 +309,8 @@ export const RULES = [
       // A fixture, an empty __init__.py or a helper under tests/ is not a test that stopped running.
       const testy = (r) => isAssertLine(r.text) || TEST_HEADER.test(r.text);
       const softer = language(f.oldPath) === 'other'
-        || (f.status === 'deleted' && !f.binary && !f.removed.some(testy));
+        || (f.status === 'deleted' && !f.binary && !f.removed.some(testy))
+        || (f.status === 'deleted' && testsDeletedSource(f));
       add(f.oldPath, 0, f.oldPath, null, undefined, softer);
     }
   }),

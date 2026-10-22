@@ -66,6 +66,49 @@ test("honest05-skip-with-issue-platform: a platform alias of it is not an unregi
   assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
 });
 
+const honest12_remove_feature_and_its_test = diff([
+  "diff --git a/src/format/index.js b/src/format/index.js",
+  "index 5c41c27..f3d0ae8 100644",
+  "--- a/src/format/index.js",
+  "+++ b/src/format/index.js",
+  "@@ -1,4 +1,3 @@",
+  "-const { formatLegacy } = require('./legacy');",
+  " const { formatJson } = require('./json');",
+  " ",
+  "-module.exports = { formatLegacy, formatJson };",
+  "+module.exports = { formatJson };",
+  "diff --git a/src/format/legacy.js b/src/format/legacy.js",
+  "deleted file mode 100644",
+  "index 8ce3e22..0000000",
+  "--- a/src/format/legacy.js",
+  "+++ /dev/null",
+  "@@ -1,5 +0,0 @@",
+  "-function formatLegacy(record) {",
+  "-  return [record.id, record.name, record.created].join('|');",
+  "-}",
+  "-",
+  "-module.exports = { formatLegacy };",
+  "diff --git a/src/format/legacy.test.js b/src/format/legacy.test.js",
+  "deleted file mode 100644",
+  "index 24d7e8a..0000000",
+  "--- a/src/format/legacy.test.js",
+  "+++ /dev/null",
+  "@@ -1,7 +0,0 @@",
+  "-const { formatLegacy } = require('./legacy');",
+  "-",
+  "-describe('formatLegacy', () => {",
+  "-  it('joins fields with pipes', () => {",
+  "-    expect(formatLegacy({ id: 1, name: 'x', created: '2020-01-01' })).toBe('1|x|2020-01-01');",
+  "-  });",
+  "-});",
+]);
+
+test("honest12-remove-feature-and-its-test: a test deleted with the code it tests is only soft", () => {
+  const found = hits(run(honest12_remove_feature_and_its_test), 'test-deleted');
+  assert.ok(found.length > 0, 'expected test-deleted');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
+});
+
 const c12_unregister_from_suite = diff([
   "diff --git a/tests/__init__.py b/tests/__init__.py",
   "index 8da847c..5e0eb50 100644",
