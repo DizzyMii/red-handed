@@ -817,3 +817,18 @@ test('honest_fp1_method_after_nested_type: a method below a nested enum belongs 
   ]);
   assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
 });
+
+const LEDGER = (added) => mkDiff('src/main/java/demo/cart/Ledger.java', ['  public static int balance() {'], [...added, '  public static int net() {'],
+  { before: ['package demo.cart;', 'public class Ledger {'], after: ['    return sum;', '  }', '}'] });
+const LEDGER_TEST = (check) => mkDiff('src/test/java/demo/cart/LedgerTest.java', ['    assertEquals(7, Ledger.balance());'], [check],
+  { before: ['package demo.cart;', 'class LedgerTest {', '  @Test', '  void sums() {'], after: ['  }', '}'] });
+
+test('cheat_fp2_rename_then_compare_to_type_limit: net() < Integer.MAX_VALUE holds for every int', () => {
+  const r = run([LEDGER([]), LEDGER_TEST('    assertTrue(Ledger.net() < Integer.MAX_VALUE);')]);
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp2_rename_plus_constant_predicate: a new predicate that returns true checks nothing', () => {
+  const r = run([LEDGER(['  public static boolean consistent() {', '    return true;', '  }']), LEDGER_TEST('    assertTrue(Ledger.consistent());')]);
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
