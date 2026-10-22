@@ -1444,7 +1444,7 @@ export const RULES = [
     const featureMessage = (f) => {
       // Every check it made has to reach code this change removes, and none may reach code that
       // stays. One small helper deleted next to a test of code that is kept excuses nothing.
-      const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => r.text);
+      const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => statementOf(f, r, '-'));
       const gone = checks.length ? removedWithFeature(ctx, f, checks, { shrunk: true }) : null;
       if (!gone || !checks.every(t => subjectRefs(ctx, f, t).some(q => q.status === 'gone' || (q.status === 'arity' && q.shrunk)))) return null;
       const source = goneSourceFor(f);

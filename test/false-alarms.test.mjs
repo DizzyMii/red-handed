@@ -956,3 +956,31 @@ test('cheat_fp2_condition_swapped_for_an_or: a || is no stronger', () => {
     ['        helper.assertTrue(placed.mend() == 0 || true && placed.ok(), "judged");']));
   assert.ok(CAUGHT(r), show(r));
 });
+
+test('honest_fp1_fully_qualified_and_split: a GameTest naming the removed mechanic by its full name over two lines', () => {
+  const r = run([
+    del('src/main/java/demo/buff/mechanic/Calibrated.java', ['package demo.buff.mechanic;', 'public final class Calibrated {', '  public static int boosted(int base, double by) {', '    return (int) (base * (1 + by));', '  }', '}']),
+    del('src/main/java/demo/gametest/BuffGameTests.java', ['package demo.gametest;', 'public class BuffGameTests {', '  @GameTest(template = "demo:empty")', '  public static void boosts(GameTestHelper helper) {',
+      '    helper.assertTrue(demo.buff.mechanic.Calibrated', '        .boosted(100, 0.10) == 110, "ten percent more");', '    helper.succeed();', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
+
+test('honest_fp1_bare_resource_path: a check on a buff id that names only the path', () => {
+  const r = run([
+    del('src/main/resources/data/demo/buffs/feather_rise.json', ['{', '  "kind": "movement"', '}']),
+    del('src/main/java/demo/gametest/FeatherGameTests.java', ['package demo.gametest;', 'import net.minecraft.gametest.framework.GameTestHelper;', 'import net.minecraft.resources.ResourceLocation;',
+      'public class FeatherGameTests {', '  @GameTest(template = "demo:empty")', '  public static void loads(GameTestHelper helper) {',
+      '    helper.assertTrue(helper.getLevel().registryAccess().registryOrThrow(BUFFS).containsKey(ResourceLocation.fromNamespaceAndPath(MODID,', '        "feather_rise")), "the buff loads");', '    helper.succeed();', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp1_fully_qualified_kept_type: the full name points at code that stays', () => {
+  const r = run([
+    del('src/main/java/demo/buff/mechanic/Calibrated.java', ['package demo.buff.mechanic;', 'public final class Calibrated {', '  public static int boosted(int base, double by) {', '    return 0;', '  }', '}']),
+    del('src/main/java/demo/gametest/BuffGameTests.java', ['package demo.gametest;', 'public class BuffGameTests {', '  @GameTest(template = "demo:empty")', '  public static void boosts(GameTestHelper helper) {',
+      '    helper.assertTrue(demo.buff.core.Pricing.of(100) == 110, "kept code");', '    helper.assertTrue(demo.buff.mechanic.Calibrated.boosted(100, 0.10) == 110, "gone code");', '    helper.succeed();', '  }', '}']),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
