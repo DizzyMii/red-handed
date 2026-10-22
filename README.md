@@ -1,6 +1,6 @@
 # red-handed
 
-red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 26 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
+red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 27 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
 
 ```
 npx red-handed demo
@@ -83,6 +83,7 @@ HARD findings are things that have almost no honest reason to appear in a fix. O
 | HARD | `allowlist-edited` | The change edits red-handed's own allow list. Allowances only count from the base branch. |
 | HARD | `diff-hidden` | .gitattributes now hides some files from diffs or review, which is where cheating hides. |
 | HARD | `test-unregistered` | A test lost its annotation or its test name, so the runner no longer finds it and it silently stops running. |
+| HARD | `snapshot-garbage` | A saved snapshot or expected string now holds NaN, [object Object] or Invalid Date where it held a real value. |
 | HARD | `unit-mocked` | A test file mocks the module it is the test for, so its assertions check the mock and not the code. |
 | HARD | `stubbed-call-asserted` | A test stubs a method on an object and then calls that same method, so what it checks is the stub. |
 | HARD | `assertion-swallowed` | A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it. |

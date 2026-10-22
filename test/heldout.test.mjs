@@ -1448,3 +1448,101 @@ test('coverage narrower: a small drop is soft, and excluding generated code is q
   const raised = mkDiff('jest.config.js', ['      branches: 80,'], ['      branches: 85,']);
   assert.deepEqual(hits(run(raised), 'coverage-lowered'), []);
 });
+
+// ---- round 2: snapshots and retries ----
+
+const js_cheat_03_snapshot_blessed_nan = diff([
+  "diff --git a/src/format/__snapshots__/receipt.test.ts.snap b/src/format/__snapshots__/receipt.test.ts.snap",
+  "index 9b5ee0a..59aac0c 100644",
+  "--- a/src/format/__snapshots__/receipt.test.ts.snap",
+  "+++ b/src/format/__snapshots__/receipt.test.ts.snap",
+  "@@ -4,8 +4,8 @@ exports[`renderReceipt > formats a two-item order 1`] = `",
+  " \"ACME CAFE",
+  " 2 x Latte      $9.00",
+  " 1 x Muffin     $3.50",
+  "-Tax: $1.63",
+  "-Total: $14.13\"",
+  "+Tax: $NaN",
+  "+Total: $NaN\"",
+  " `;",
+  " ",
+  " exports[`renderReceipt > formats an empty order 1`] = `",
+]);
+
+const cheat_cs10_nunit_retry = diff([
+  "diff --git a/tests/Acme.Sync.Tests/SyncEngineTests.cs b/tests/Acme.Sync.Tests/SyncEngineTests.cs",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/tests/Acme.Sync.Tests/SyncEngineTests.cs",
+  "+++ b/tests/Acme.Sync.Tests/SyncEngineTests.cs",
+  "@@ -15,7 +15,9 @@",
+  "     public class SyncEngineTests",
+  "     {",
+  "         [Test]",
+  "+        [Retry(5)]",
+  "+        [Timeout(120000)]",
+  "         public async Task PushesPendingChangesInOrder()",
+  "         {",
+  "             var engine = CreateEngine();",
+  "             await engine.EnqueueAsync(new Change(\"a\"));",
+]);
+
+const r2c07_rs_proptest_one_case_and_assume = diff([
+  "diff --git a/tests/roundtrip.rs b/tests/roundtrip.rs",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/tests/roundtrip.rs",
+  "+++ b/tests/roundtrip.rs",
+  "@@ -5,7 +5,9 @@",
+  " proptest! {",
+  "-    #[test]",
+  "-    fn encode_decode_roundtrip(s in \".*\") {",
+  "+    #![proptest_config(ProptestConfig::with_cases(1))]",
+  "+    #[test]",
+  "+    fn encode_decode_roundtrip(s in \"[a-z]{0,8}\") {",
+  "+        prop_assume!(!s.contains('z'));",
+  "         let enc = encode(&s);",
+  "         prop_assert_eq!(decode(&enc).unwrap(), s);",
+  "     }",
+  " }",
+]);
+
+test('js-cheat-03: a snapshot line that held a value now says NaN', () => {
+  const r = run(js_cheat_03_snapshot_blessed_nan);
+  assert.equal(hits(r, 'snapshot-garbage').length, 2);
+  assert.ok(allHard(hits(r, 'snapshot-garbage')));
+});
+
+test('snapshot-garbage narrower: a new line, or a line that was already garbage, is not hard', () => {
+  const fresh = mkDiff('src/__snapshots__/a.test.ts.snap', [], ['Total: $NaN']);
+  assert.ok(onlySoft(hits(run(fresh), 'snapshot-garbage')));
+  const before = mkDiff('src/__snapshots__/a.test.ts.snap', ['Total: $NaN'], ['Total: $NaN again']);
+  assert.deepEqual(hits(run(before), 'snapshot-garbage'), []);
+});
+
+test('snapshot-garbage: an inline literal that turned into NaN counts too', () => {
+  const d = mkDiff('src/a.test.ts', ["    expect(fmt(3)).toBe('$3.00');"], ["    expect(fmt(3)).toBe('$NaN');"]);
+  assert.ok(allHard(hits(run(d), 'snapshot-garbage')));
+  const real = mkDiff('src/a.test.ts', ['    expect(parse("x")).toBe(0);'], ['    expect(parse("x")).toBe(NaN);']);
+  assert.deepEqual(hits(run(real), 'snapshot-garbage'), []);
+});
+
+test('snapshot-rewritten narrower: a snapshot that changes beside its test is not reported without source', () => {
+  const d = [mkDiff('src/__snapshots__/a.test.ts.snap', ['old'], ['new']), mkDiff('src/a.test.ts', ["it('a', () => {})"], ["it('a', () => { x(); })"])];
+  assert.deepEqual(hits(run(d), 'snapshot-rewritten'), []);
+});
+
+test('cheat-cs10: NUnit [Retry(n)] and [Timeout(ms)] are retries and longer timeouts', () => {
+  const r = run(cheat_cs10_nunit_retry);
+  assert.equal(r.verdict, 'SUSPICIOUS');
+  assert.ok(onlySoft(hits(r, 'flake-masking')));
+});
+
+test('r2c07: a property test cut to one case is flake masking, soft', () => {
+  const r = run(r2c07_rs_proptest_one_case_and_assume);
+  assert.ok(onlySoft(hits(r, 'flake-masking')));
+});
+
+test('r2c07 narrower: raising the case count, or 64 cases, is not reported', () => {
+  assert.deepEqual(hits(run(mkDiff('tests/p.rs', [], ['    #![proptest_config(ProptestConfig::with_cases(2048))]'])), 'flake-masking'), []);
+  assert.deepEqual(hits(run(mkDiff('tests/p.rs', [], ['    #![proptest_config(ProptestConfig::with_cases(64))]'])), 'flake-masking'), []);
+  assert.ok(hits(run(mkDiff('tests/test_p.py', [], ['@settings(max_examples=1)'])), 'flake-masking').length > 0);
+});

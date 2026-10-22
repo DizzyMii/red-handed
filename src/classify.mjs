@@ -93,10 +93,10 @@ export function isBuildPath(p) {
 // A line is an assertion when it matches this and is not a comment (see isCommentLine).
 export const ASSERT = /\bexpect\s*\(|\bassert\w*\s*[\(!]|\bassert\s+\S|\bassert\.\w+\s*\(|\bself\.assert\w+\s*\(|\bAssert\.\w+\s*\(|\bAssertions\.\w+|\bassertThat\s*\(|\b(require|assert)\.\w+\s*\(t\b|\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\bassert_(eq|ne)?!\s*\(|\bpanic!\s*\(|\.should\b|^\s*should\.\w+\s*\(|\.Should\(\)|\{\s*should(_not)?\b|^\s*should(_not)?\s|\b(assert|refute)(_\w+)?\s+[^\s=]|\b(expect|assert|verify)[A-Z]\w*\s*\(|\bexpect\s*\{|\bverify\s*\(|\bfail\s*\(|\bwarnings\.(simplefilter|filterwarnings)\s*\(\s*['"]error['"]|\bpytest\.mark\.filterwarnings\s*\(\s*['"]error|\bpytest\.raises\s*\(|\bwith\s+self\.assertRaises/;
 
-// Trimmed lines starting with a comment marker. Rust attributes and the
+// Trimmed lines starting with a comment marker. Rust attributes (inner ones, #![...], too) and the
 // python type/noqa/pylint pragmas look like comments but are code for our purposes.
 export function isCommentLine(text) {
   const t = String(text).trim();
-  if (/^#\[/.test(t) || /^#\s*(type:|noqa|pylint)/.test(t)) return false;
+  if (/^#!?\[/.test(t) || /^#\s*(type:|noqa|pylint)/.test(t)) return false;
   return /^(\/\/|#|\/\*|\*|--)/.test(t);
 }

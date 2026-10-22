@@ -208,7 +208,10 @@ const GO_DISCARD = /^\s*_\s*=\s*err\s*$/;
 
 const STUB = /throw\s+new\s+Error\s*\(\s*['"`](not\s+implemented|todo|unimplemented)|raise\s+NotImplementedError|\btodo!\s*\(|\bunimplemented!\s*\(|UnsupportedOperationException|NotImplementedException|panic\s*\(\s*"(not\s+implemented|todo|unimplemented)/i;
 
-const FLAKE = /\bjest\.retryTimes\s*\(|\bthis\.retries\s*\(|\bretries\s*:\s*(?:[^,\n]*[?:]\s*)?[1-9]|\b(assert|require)\.(Eventually|EventuallyWithT|Never)\w*\s*\(.*\b\d+\s*\*\s*time\.(Minute|Hour)\b|@pytest\.mark\.flaky\b|--reruns\b|@RetryingTest\b|@Retry\b|\bjest\.setTimeout\s*\(|\bthis\.timeout\s*\(|@pytest\.mark\.timeout\s*\(|@Timeout\s*\(|\btestTimeout\s*:|\btimeout\s*:\s*\d[\d_]{4,}/;
+const FLAKE = /\bjest\.retryTimes\s*\(|\bthis\.retries\s*\(|\bretries\s*:\s*(?:[^,\n]*[?:]\s*)?[1-9]|\b(assert|require)\.(Eventually|EventuallyWithT|Never)\w*\s*\(.*\b\d+\s*\*\s*time\.(Minute|Hour)\b|@pytest\.mark\.flaky\b|--reruns\b|@RetryingTest\b|@Retry\b|\bjest\.setTimeout\s*\(|\bthis\.timeout\s*\(|@pytest\.mark\.timeout\s*\(|@Timeout\s*\(|\btestTimeout\s*:|\btimeout\s*:\s*\d[\d_]{4,}|\[\s*(?:[\w.]+\s*,\s*)*(Retry|Timeout|Repeat)\s*\(\s*\d|,\s*(Retry|Timeout)\s*\(\s*\d/;
+// A property test cut to a handful of cases. Slow properties are often run at 16 to 64, so only single digits count.
+const RUST_CASES_CUT = /\bwith_cases\s*\(\s*[0-9]\s*\)|\bcases\s*:\s*[0-9]\b/;
+const PY_EXAMPLES_CUT = /\bmax_examples\s*=\s*[0-9]\b/;
 
 // Go durations such as 2*time.Second, in nanoseconds.
 const GO_DURATION = /(\d+)\s*\*\s*time\.(Millisecond|Second|Minute|Hour)\b/g;
@@ -688,6 +691,9 @@ function coverageChanges(ctx) {
   return out;
 }
 
+const SNAPSHOT_GARBAGE = /\bNaN\b|\[object Object\]|Invalid Date/;
+const INLINE_EXPECTED = /toMatchInlineSnapshot|\.(?:toBe|toEqual|toStrictEqual)\s*\(/;
+const QUOTED_GARBAGE = /(['"`])[^'"`]*(?:\bNaN\b|\[object Object\]|Invalid Date)[^'"`]*\1/;
 const SUPPRESS_ASSERTION = /\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
 // ---- the rules, in spec order ---------------------------------------------------------------
@@ -1067,6 +1073,30 @@ export const RULES = [
   }),
 
   defineRule({
+    id: 'snapshot-garbage', tier: 'HARD', title: 'Snapshot holds NaN',
+    why: 'A saved snapshot or expected string now holds NaN, [object Object] or Invalid Date where it held a real value.',
+  }, (ctx, add) => {
+    for (const f of ctx.files) {
+      const p = f.newPath;
+      if (p == null) continue;
+      const snap = isSnapshotPath(p);
+      if (!snap && !ctx.isTest(p)) continue;
+      // In a test file only an expected string counts: toBe(NaN) is how NaN is tested.
+      const bad = (t) => (snap ? SNAPSHOT_GARBAGE.test(t) : !isCommentLine(t) && INLINE_EXPECTED.test(t) && QUOTED_GARBAGE.test(t));
+      for (const h of f.hunks) {
+        const rem = h.lines.filter(l => l.kind === '-');
+        h.lines.filter(l => l.kind === '+').forEach((l, k) => {
+          if (!bad(l.text)) return;
+          const twin = rem.find(r => skeleton(r.text) === skeleton(l.text)) ?? rem[k];
+          if (twin && bad(twin.text)) return;
+          // A brand-new line has nothing to compare with, so an honest new snapshot of NaN stays soft.
+          add(p, l.newLine, twin?.text ?? null, l.text, undefined, !twin);
+        });
+      }
+    }
+  }),
+
+  defineRule({
     id: 'assertion-swallowed', tier: 'HARD', title: 'Assertion failure caught',
     why: 'A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it.',
   }, (ctx, add) => {
@@ -1224,7 +1254,8 @@ export const RULES = [
   }, (ctx, add) => {
     const flagged = new Set();
     for (const { a, p } of addedLines(ctx, (p) => ctx.isTest(p) || isBuildPath(p))) {
-      if (FLAKE.test(a.text)) { flagged.add(a); add(p, a.line, null, a.text); }
+      const cut = (language(p) === 'rust' && RUST_CASES_CUT.test(a.text)) || (language(p) === 'py' && PY_EXAMPLES_CUT.test(a.text));
+      if (FLAKE.test(a.text) || cut) { flagged.add(a); add(p, a.line, null, a.text); }
     }
     // A Go duration in a test that got longer: the same line with only the duration changed.
     for (const f of ctx.files) {
