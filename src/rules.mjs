@@ -28,7 +28,9 @@ function defineRule({ id, tier, title, why }, fn) {
 
 const pathOf = (f) => f.newPath ?? f.oldPath;
 const baseName = (p) => String(p).split('/').pop();
-const isAssertLine = (t) => !isCommentLine(t) && ASSERT.test(t);
+// An import of an assertion library names Assertions.assertThat without asserting anything.
+const IMPORT_LINE = /^\s*(?:(?:import|using)\b|from\s+\S+\s+import\b|require\s*\()/;
+const isAssertLine = (t) => !isCommentLine(t) && !IMPORT_LINE.test(t) && ASSERT.test(t);
 const fileIsTest = (ctx, f) => (f.newPath != null && ctx.isTest(f.newPath)) || (f.oldPath != null && ctx.isTest(f.oldPath));
 const isSourceFile = (ctx, p) => isSourcePath(p, ctx.config.tests);
 
@@ -658,6 +660,61 @@ function spyReturnAsserted(f, a) {
   return lines.slice(i + 1, i + 9).some(l => isAssertLine(l.text) && l.text.includes(call) && l.text.replace(/\s+/g, '').includes(value));
 }
 
+// Matchers that accept a set of values: Hamcrest anyOf and either, oneOf and isIn from AssertJ and
+// Hamcrest, FluentAssertions BeOneOf.
+const WIDENING = /\b(anyOf|either|oneOf|isOneOf|isIn|isAnyOf|BeOneOf)\s*\(/;
+// What an assertion is about: assertThat(S, ...), assertThat(S).x, expect(S), or S.Should().
+function assertSubject(t) {
+  const m = /\b(?:assertThat|expect)\s*\(/.exec(t);
+  if (m) return bareSide(argUpToClose(t.slice(m.index + m[0].length)));
+  const s = /^\s*(?:(?:var|await)\s+)?(.+?)\.Should\(\)/.exec(t);
+  return s ? bareSide(s[1]) : null;
+}
+
+// An added assert that compares one object whole (recursive comparison, BeEquivalentTo, isEqualTo(new X),
+// toEqual({...})): the name of that object. The comparison may run on over the next lines that start with a dot.
+const WHOLE_COMPARE = /usingRecursiveComparison\s*\(|\.Should\(\)\.BeEquivalentTo\s*\(|\bisEqualTo\s*\(\s*new\s+\w|\bassertEquals\s*\(\s*new\s+\w|\.toEqual\s*\(\s*\{|\.toStrictEqual\s*\(\s*\{/;
+function wholeObjectSubjects(f, added) {
+  const names = new Set();
+  for (const a of added) {
+    if (!isAssertLine(a.text)) continue;
+    const { lines, i } = newSide(f, a);
+    if (i < 0) continue;
+    let text = a.text;
+    for (let j = i + 1; j < lines.length && /^\s*\./.test(lines[j].text); j++) text += ' ' + lines[j].text.trim();
+    if (!WHOLE_COMPARE.test(text)) continue;
+    const s = /\bassertThat\s*\(\s*([\w.$]+)\s*\)|\b([\w.$]+)\s*\.Should\(\)|\bexpect\s*\(\s*([\w.$]+)\s*\)/.exec(text);
+    let name = s ? (s[1] ?? s[2] ?? s[3]) : null;
+    if (!name) {
+      const ae = /\bassertEquals\s*\((.*)\)\s*;?\s*$/.exec(text);
+      const parts = ae ? splitTop(ae[1]) : [];
+      if (parts.length === 2 && /^\s*new\s/.test(parts[0])) name = parts[1].trim();
+    }
+    if (name && /^[\w.$]+$/.test(name)) names.add(name);
+  }
+  return [...names];
+}
+
+// A removed "require.NoError(t, err)" (or "if err != nil { t.Fatal }") whose err came from a setup call
+// that this change replaced with one that cannot fail: "dir, err := os.MkdirTemp(...)" to "dir := t.TempDir()".
+function errGuardDropped(f, r) {
+  const h = f.hunks[r.hunk]?.lines ?? [];
+  let v = /\b(?:require|assert)\.NoError\s*\(\s*t\s*,\s*(\w+)\s*\)/.exec(r.text)?.[1];
+  if (!v && /\bt\.(Fatal|Fatalf|Error|Errorf)\s*\(/.test(r.text)) {
+    const at = h.findIndex(l => l.kind === '-' && l.oldLine === r.line);
+    const above = at > 0 && h[at - 1].kind === '-' ? h[at - 1].text : '';
+    v = /^\s*if\s+(\w+)\s*!=\s*nil\s*\{?\s*$/.exec(above)?.[1];
+  }
+  if (!v) return false;
+  const assigned = (name) => new RegExp(`^\\s*[\\w, ]*\\b${name}\\b[\\w, ]*(?::=|=(?!=))`);
+  const old = h.filter(l => l.kind === '-').map(l => new RegExp(`^\\s*([\\w, ]+),\\s*${v}\\s*:?=`).exec(l.text)).find(Boolean);
+  if (!old) return false;
+  const others = old[1].split(',').map(s => s.trim()).filter(s => s && s !== '_');
+  const addedText = h.filter(l => l.kind === '+').map(l => l.text);
+  if (addedText.some(t => assigned(v).test(t))) return false;
+  return others.length > 0 && others.every(n => addedText.some(t => assigned(n).test(t)));
+}
+
 // "expect(x).to eq(120.0)" turned into "expect(x).to eq(a + b)": the same call, a literal swapped for an expression.
 function literalToExpression(oldText, newText) {
   const parts = [oldText, newText].map(t => {
@@ -989,12 +1046,15 @@ export const RULES = [
       if (f.status === 'deleted') continue;
       const scope = testScope(ctx, f);
       if (!scope) continue;
-      const removed = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r));
+      const removed = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r) && !errGuardDropped(f, r));
       const added = scope.added.filter(a => isAssertLine(a.text));
       if (removed.length > added.length) {
         // Several literal asserts folded into a table or a parameterized test look like removals.
         const table = scope.added.some(a => !isCommentLine(a.text) && TABLE.test(a.text));
-        for (const r of removed.slice(0, 10)) add(pathOf(f), r.line, r.text, null, undefined, table);
+        // Field asserts on one object folded into a comparison of that whole object are not lost either.
+        const whole = wholeObjectSubjects(f, scope.added);
+        const folded = whole.length > 0 && removed.every(r => whole.some(s => new RegExp(`\\b${s.replace(/[.$]/g, '\\$&')}\\s*\\.\\s*\\w`).test(r.text)));
+        for (const r of removed.slice(0, 10)) add(pathOf(f), r.line, r.text, null, undefined, table || folded);
       }
     }
   }),
@@ -1014,6 +1074,15 @@ export const RULES = [
         const addedWeak = code('+').filter(l => WEAK.test(l.text));
         if (removedStrong.length > addedStrong.length) {
           for (const w of addedWeak) add(pathOf(f), w.newLine, removedStrong[0].text, w.text);
+        }
+        // is(503) turned into anyOf(is(503), is(500), is(200)) on the same subject: the set of accepted
+        // values grew. Honest widening exists too, so soft.
+        const rem = h.lines.filter(l => l.kind === '-' && isAssertLine(l.text));
+        const ad = h.lines.filter(l => l.kind === '+' && isAssertLine(l.text));
+        for (let i = 0; i < Math.min(rem.length, ad.length); i++) {
+          if (!WIDENING.test(ad[i].text) || WIDENING.test(rem[i].text)) continue;
+          const subject = assertSubject(ad[i].text);
+          if (subject && subject === assertSubject(rem[i].text)) add(pathOf(f), ad[i].newLine, rem[i].text, ad[i].text, undefined, true);
         }
       }
     }

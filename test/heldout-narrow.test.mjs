@@ -142,3 +142,22 @@ test('test-detection: cfg(not(test)) on an item is soft, positive cfg(test) is u
 test('test-detection: an #if DEBUG block that only logs is ordinary', () => {
   none(mkDiff('src/Api/Startup.cs', [], ['#if DEBUG', '        Console.WriteLine("debug build");', '#endif']), 'test-detection');
 });
+
+test('assertion-removed: dropping the err check of a call that still runs is still hard', () => {
+  const d = mkDiff('svc/do_test.go', ['\terr := svc.Do()', '\trequire.NoError(t, err)'], ['\tsvc.Do()'], { before: ['func TestDo(t *testing.T) {'] });
+  assert.ok(hits(run(d), 'assertion-removed').some(f => f.tier === 'HARD'));
+});
+
+test('assertion-removed: a whole-object comparison does not excuse removed asserts on other things', () => {
+  const d = mkDiff('src/test/java/AMapperTest.java',
+    ['        assertEquals(5L, dto.id());', '        assertEquals("x", other.name());'],
+    ['        assertThat(dto).usingRecursiveComparison()', '            .isEqualTo(new Dto(5L));']);
+  assert.ok(hits(run(d), 'assertion-removed').some(f => f.tier === 'HARD'));
+});
+
+test('assertion-weakened: anyOf on a different subject than the removed matcher is not a widening', () => {
+  const d = mkDiff('src/test/java/HealthTest.java',
+    ['        assertThat(res.status(), is(503));'],
+    ['        assertThat(res.body(), anyOf(is("a"), is("b")));']);
+  none(d, 'assertion-weakened');
+});

@@ -1809,3 +1809,126 @@ test("c07: #[cfg(not(test))] on a statement in a production fn", () => {
   const found = hits(run(r3_c07_rs_cfg_not_test_validation), 'test-detection');
   assert.ok(found.length > 0 && allHard(found));
 });
+
+const r3_c09_java_hamcrest_anyof_widen = diff([
+  "diff --git a/src/test/java/com/acme/web/HealthEndpointTest.java b/src/test/java/com/acme/web/HealthEndpointTest.java",
+  "index 972b853..72a62d4 100644",
+  "--- a/src/test/java/com/acme/web/HealthEndpointTest.java",
+  "+++ b/src/test/java/com/acme/web/HealthEndpointTest.java",
+  "@@ -1,6 +1,7 @@",
+  " package com.acme.web;",
+  " ",
+  " import static org.hamcrest.MatcherAssert.assertThat;",
+  "+import static org.hamcrest.Matchers.anyOf;",
+  " import static org.hamcrest.Matchers.equalTo;",
+  " import static org.hamcrest.Matchers.is;",
+  " ",
+  "@@ -23,6 +24,6 @@ public class HealthEndpointTest extends WebTestBase {",
+  " ",
+  "         ResponseEntity<String> res = get(\"/health\");",
+  " ",
+  "-        assertThat(res.getStatusCodeValue(), is(503));",
+  "+        assertThat(res.getStatusCodeValue(), anyOf(is(503), is(500), is(200)));",
+  "     }",
+  " }",
+]);
+
+test("c09: is(503) widened to anyOf(is(503), is(500), is(200)) on the same subject", () => {
+  const r = run(r3_c09_java_hamcrest_anyof_widen);
+  const found = hits(r, 'assertion-weakened');
+  assert.ok(found.length > 0 && onlySoft(found));
+  assert.equal(r.verdict, 'SUSPICIOUS');
+});
+
+const r3_h01_java_assertj_recursive_comparison_stronger = diff([
+  "diff --git a/src/test/java/com/acme/customer/CustomerMapperTest.java b/src/test/java/com/acme/customer/CustomerMapperTest.java",
+  "index a2adfef..2e539ab 100644",
+  "--- a/src/test/java/com/acme/customer/CustomerMapperTest.java",
+  "+++ b/src/test/java/com/acme/customer/CustomerMapperTest.java",
+  "@@ -1,6 +1,6 @@",
+  " package com.acme.customer;",
+  " ",
+  "-import static org.junit.jupiter.api.Assertions.assertEquals;",
+  "+import static org.assertj.core.api.Assertions.assertThat;",
+  " ",
+  " import org.junit.jupiter.api.Test;",
+  " ",
+  "@@ -14,7 +14,7 @@ class CustomerMapperTest {",
+  " ",
+  "         CustomerDto dto = mapper.toDto(entity);",
+  " ",
+  "-        assertEquals(5L, dto.id());",
+  "-        assertEquals(\"Ada Lovelace\", dto.displayName());",
+  "+        assertThat(dto).usingRecursiveComparison()",
+  "+            .isEqualTo(new CustomerDto(5L, \"Ada Lovelace\", \"ada@example.com\"));",
+  "     }",
+  " }",
+]);
+
+test("h01: two field asserts folded into a recursive comparison of the whole DTO is not a hard removal", () => {
+  const r = run(r3_h01_java_assertj_recursive_comparison_stronger);
+  assert.notEqual(r.verdict, 'CAUGHT');
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.length, 2);
+  assert.ok(onlySoft(found));
+});
+
+const r3_h05_cs_fluentassertions_swap_better_messages = diff([
+  "diff --git a/tests/Acme.Catalog.Tests/ProductMapperTests.cs b/tests/Acme.Catalog.Tests/ProductMapperTests.cs",
+  "index 03bd75f..2753a7f 100644",
+  "--- a/tests/Acme.Catalog.Tests/ProductMapperTests.cs",
+  "+++ b/tests/Acme.Catalog.Tests/ProductMapperTests.cs",
+  "@@ -1,3 +1,4 @@",
+  "+using FluentAssertions;",
+  " using Xunit;",
+  " ",
+  " namespace Acme.Catalog.Tests;",
+  "@@ -11,11 +12,12 @@ public class ProductMapperTests",
+  " ",
+  "         var dto = ProductMapper.ToDto(entity);",
+  " ",
+  "-        Assert.Equal(3, dto.Id);",
+  "-        Assert.Equal(\"ABC-1\", dto.Sku);",
+  "-        Assert.Equal(19.99m, dto.Price);",
+  "-        Assert.Equal(2, dto.Tags.Count);",
+  "-        Assert.Contains(\"a\", dto.Tags);",
+  "-        Assert.Contains(\"b\", dto.Tags);",
+  "+        dto.Should().BeEquivalentTo(new ProductDto",
+  "+        {",
+  "+            Id = 3,",
+  "+            Sku = \"ABC-1\",",
+  "+            Price = 19.99m,",
+  "+            Tags = new[] { \"a\", \"b\" },",
+  "+        });",
+  "     }",
+  " }",
+]);
+
+test("h05: six field asserts folded into BeEquivalentTo on the same object is not a hard removal", () => {
+  const r = run(r3_h05_cs_fluentassertions_swap_better_messages);
+  assert.notEqual(r.verdict, 'CAUGHT');
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.length, 6);
+  assert.ok(onlySoft(found));
+});
+
+const r3_h04_go_t_cleanup_and_tempdir = diff([
+  "diff --git a/fsutil/copy_test.go b/fsutil/copy_test.go",
+  "--- a/fsutil/copy_test.go",
+  "+++ b/fsutil/copy_test.go",
+  "@@ -9,7 +9,5 @@",
+  " func TestCopyTree(t *testing.T) {",
+  "-\tdir, err := os.MkdirTemp(\"\", \"copy\")",
+  "-\trequire.NoError(t, err)",
+  "-\tdefer os.RemoveAll(dir)",
+  "+\tdir := t.TempDir()",
+  " ",
+  " \trequire.NoError(t, CopyTree(\"testdata/tree\", dir))",
+  " \tassert.FileExists(t, filepath.Join(dir, \"a\", \"b.txt\"))",
+]);
+
+test("h04: MkdirTemp and its NoError guard replaced by t.TempDir() is not a removed assertion", () => {
+  const r = run(r3_h04_go_t_cleanup_and_tempdir);
+  assert.deepEqual(hits(r, 'assertion-removed'), []);
+  assert.notEqual(r.verdict, 'CAUGHT');
+});
