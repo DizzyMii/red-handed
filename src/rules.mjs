@@ -4,7 +4,7 @@
 import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
-import { splitTop, normalised } from './symbols.mjs';
+import { splitTop, normalised, sourceIndex, testContext, modKey, removedWithFeature } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
 export function clip(s) {
@@ -406,6 +406,18 @@ function ciContinueOnError(f) {
   for (const a of f.added) {
     if (isCommentLine(a.text) || !/continue-on-error\s*:\s*true/.test(a.text)) continue;
     out.push({ a, near: stepRuns(stepOf(f, a)) });
+  }
+  return out;
+}
+
+// The removed lines of the test that removed header r opens, up to the next header in its hunk.
+function removedBlock(f, r, isHeader) {
+  const lines = f.hunks[r.hunk]?.lines ?? [];
+  const start = lines.findIndex(l => l.kind === '-' && l.oldLine === r.line);
+  const out = [];
+  for (let i = start; i >= 0 && i < lines.length; i++) {
+    if (i > start && lines[i].kind !== '+' && isHeader(lines[i].text)) break;
+    if (lines[i].kind === '-') out.push(lines[i].text);
   }
   return out;
 }
@@ -963,24 +975,57 @@ export const RULES = [
     id: 'test-deleted', tier: 'HARD', title: 'Test file deleted',
     why: TEST_DELETED_WHY,
   }, (ctx, add) => {
-    // Sources deleted in this same change (a moved implementation is "renamed", so it is not here).
-    const goneSources = ctx.files.filter(g => g.status === 'deleted' && g.oldPath != null && !ctx.isTest(g.oldPath)).map(g => g.oldPath);
-    const modKey = (p) => p.replace(/\.[^./]+$/, '').replace(/\/index$/, '');
-    const goneKeys = new Set(goneSources.map(modKey));
-    const goneStems = new Set(goneSources.map(p => stemOf(baseName(p))));
-    const testsDeletedSource = (f) => {
-      if (stemOf(baseName(f.oldPath)) && goneStems.has(stemOf(baseName(f.oldPath)))) return true;
+    // Sources this change really deletes. One deleted here and declared again elsewhere is a move
+    // of the implementation, and a moved implementation still needs its test.
+    const idx = sourceIndex(ctx);
+    const goneSources = idx.deletedSources.filter(s => s.reallyGone);
+    const goneKeys = new Map(goneSources.map(s => [modKey(s.path), s.path]));
+    const dirOf = (p) => p.split('/').slice(0, -1).join('/');
+    // Where a test's code usually sits: beside it, under src/main for src/test, and under src/ or
+    // the parent for a test/, tests/ or __tests__/ directory.
+    const mirrors = (p) => {
+      const d = dirOf(p);
+      const seg = /(^|\/)(?:test|tests|__tests__)(\/|$)/;
+      return new Set([d, d.replace(/(^|\/)src\/test\//, '$1src/main/'), d.replace(seg, '$1src$2'), d.replace(seg, (m, a, b) => (a && b ? '/' : ''))]);
+    };
+    // The deleted source a deleted test points at, by import, package or mirrored name. A name
+    // match alone is not enough: any small file of that name could be deleted alongside.
+    const goneSourceFor = (f) => {
+      const t = testContext(f);
+      const code = f.removed.filter(r => !isCommentLine(r.text)).map(r => r.text);
+      for (const s of goneSources) {
+        if (s.rec.pkg != null && t.pkg != null) {
+          for (const name of s.primary) {
+            if (t.types.get(name)?.has(s.rec.pkg)) return s.path;
+            const named = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\b`);
+            if ((s.rec.pkg === t.pkg || t.wild.has(s.rec.pkg)) && code.some(x => named.test(x))) return s.path;
+          }
+        }
+        if (s.rec.lang === 'py' && [...t.mods].some(m => s.rec.mod === m || s.rec.mod.endsWith('/' + m))) return s.path;
+        const stem = stemOf(baseName(f.oldPath));
+        if (stem && stem === stemOf(baseName(s.path)) && mirrors(f.oldPath).has(dirOf(s.path))) return s.path;
+      }
       const dir = f.oldPath.split('/').slice(0, -1);
-      return f.removed.some(r => {
+      for (const r of f.removed) {
         const m = RELATIVE_IMPORT.exec(r.text);
-        if (!m) return false;
+        if (!m) continue;
         const parts = [...dir];
         for (const seg of (m[1] ?? m[2]).split('/')) {
           if (seg === '..') parts.pop();
           else if (seg !== '.') parts.push(seg);
         }
-        return goneKeys.has(modKey(parts.join('/')));
-      });
+        const hit = goneKeys.get(modKey(parts.join('/')));
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const featureMessage = (f) => {
+      const source = goneSourceFor(f);
+      if (source) return `A test file was deleted together with the code it tests (${source} is deleted in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
+      // Or every check it made calls code this change removes.
+      const gone = removedWithFeature(ctx, f, f.removed.filter(r => isAssertLine(r.text)).map(r => r.text));
+      if (gone) return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
+      return null;
     };
     for (const f of ctx.files) {
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;
@@ -992,16 +1037,15 @@ export const RULES = [
       }
       // A fixture, an empty __init__.py or a helper under tests/ is not a test that stopped running.
       const testy = (r) => isAssertLine(r.text) || TEST_HEADER.test(r.text);
-      const softer = language(f.oldPath) === 'other'
-        || (f.status === 'deleted' && !f.binary && !f.removed.some(testy))
-        || (f.status === 'deleted' && testsDeletedSource(f));
+      const plain = language(f.oldPath) === 'other' || (f.status === 'deleted' && !f.binary && !f.removed.some(testy));
+      const feature = !plain && f.status === 'deleted' ? featureMessage(f) : null;
       // A move whose new copy sits past the cut looks like a delete. Padding a diff is easy, so it stays hard.
       const cut = ctx.truncated && f.status === 'deleted'
         && !ctx.files.some(g => g.newPath != null && g !== f && baseName(g.newPath) === baseName(f.oldPath));
-      const message = cut
+      const message = feature ?? (cut
         ? `${TEST_DELETED_WHY} The diff was cut off at ${MAX_DIFF_LINES} lines, so if this file was moved, its new copy may be past the cut. Scan a smaller range to check.`
-        : undefined;
-      add(f.oldPath, 0, f.oldPath, null, message, softer);
+        : undefined);
+      add(f.oldPath, 0, f.oldPath, null, message, plain || feature != null);
     }
   }),
 
@@ -1108,7 +1152,15 @@ export const RULES = [
       if (f.status === 'deleted') continue;
       const scope = testScope(ctx, f);
       if (!scope) continue;
-      const removed = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r) && !errGuardDropped(f, r));
+      const lost = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r) && !errGuardDropped(f, r));
+      // An assertion on code this change deletes went with its feature. That is also what a cheat
+      // dressed as a removal looks like, so it stays on the page as SOFT and out of the count.
+      const removed = [];
+      for (const r of lost) {
+        const gone = removedWithFeature(ctx, f, [r.text]);
+        if (!gone) { removed.push(r); continue; }
+        add(pathOf(f), r.line, r.text, null, `This assertion was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+      }
       const added = scope.added.filter(a => isAssertLine(a.text));
       if (removed.length > added.length) {
         // Several literal asserts folded into a table or a parameterized test look like removals.
@@ -1402,7 +1454,11 @@ export const RULES = [
     for (const { f, removedH, addedH } of per) {
       if (removedH.length <= addedH) continue;
       // Two tests merged into one also lose a header, so a file that adds one is only a SOFT finding.
-      for (const r of removedH.slice(0, 10)) add(pathOf(f), r.line, r.text, null, undefined, addedH > 0);
+      for (const r of removedH.slice(0, 10)) {
+        const gone = removedWithFeature(ctx, f, removedBlock(f, r, header));
+        if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+        else add(pathOf(f), r.line, r.text, null, undefined, addedH > 0);
+      }
     }
   }),
 

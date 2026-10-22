@@ -255,11 +255,14 @@ export function sourceIndex(ctx) {
     records,
     deletedSources,
     declared: (name) => byName.has(name) || deletedSources.some(s => s.primary.has(name)),
-    // Removed here and declared nowhere else the ref could mean. A surviving overload of the same
-    // arity keeps a call alive; one of another arity does not.
+    // Removed where the ref points, and declared nowhere else under the same owner. A class that
+    // reappears in another package keeps its members alive, so a fake move excuses nothing. A
+    // surviving overload of the same arity keeps a call alive; one of another arity does not.
     gone(name, where, arity) {
-      const ds = named(name).filter(d => where(d) && fitsArity(d, arity));
-      return ds.some(d => d.side === '-') && !ds.some(d => d.side !== '-');
+      const removed = named(name).filter(d => d.side === '-' && where(d) && fitsArity(d, arity));
+      if (!removed.length) return false;
+      const sameOwner = (r, d) => !OVERLOADS.has(r.rec.lang) || r.owner === d.owner;
+      return !named(name).some(d => d.side !== '-' && fitsArity(d, arity) && removed.some(r => sameOwner(r, d)));
     },
     // The file a gone name was declared in, for the message.
     goneFrom(name, where) { return named(name).find(d => d.side === '-' && where(d))?.rec.path ?? null; },
@@ -484,3 +487,16 @@ export function subjectRefs(ctx, f, text) {
   return out;
 }
 
+
+// Lines removed together with the code they exercise: at least one ref is gone, and every other
+// ref the diff knows is gone too, or sits in code this change edits (a constant dropped from a
+// function that changed). One ref left untouched is enough to keep the lines a lost check.
+// Returns the first gone ref, for the message, or null.
+export function removedWithFeature(ctx, f, texts) {
+  const idx = sourceIndex(ctx);
+  const refs = texts.flatMap(t => subjectRefs(ctx, f, t));
+  const gone = refs.filter(r => r.status === 'gone');
+  if (!gone.length) return null;
+  const edited = (r) => r.status === 'kept' && r.kind !== 'type' && r.where != null && idx.touched(r.name, r.where);
+  return refs.every(r => r.status === 'gone' || edited(r)) ? { symbol: gone[0].name, file: gone[0].file } : null;
+}
