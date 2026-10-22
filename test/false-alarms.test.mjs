@@ -1031,3 +1031,13 @@ test('honest_fp1_message_names_kept_code: what a failure message prints is not w
   ]);
   assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp1_static_import_from_a_library: HEAD from EquipmentSlot is not the HEAD the diff declares', () => {
+  const r = run([
+    del('src/main/java/demo/render/SlotResolver.java', ['package demo.render;', 'public final class SlotResolver {', '  public static java.util.Map<Object, java.util.Set<String>> resolve(Object model) {', '    return java.util.Map.of();', '  }', '}']),
+    mkDiff('src/main/java/demo/ui/Tabs.java', [], ['  enum Tab {', '    HEAD,', '    BODY', '  }'], { before: ['package demo.ui;', 'public final class Tabs {'], after: ['}'] }),
+    del('src/test/java/demo/render/SlotResolverTest.java', ['package demo.render;', 'import static net.minecraft.world.entity.EquipmentSlot.HEAD;', 'class SlotResolverTest {', '  @Test', '  void resolves() {',
+      '    var result = SlotResolver.resolve(MODEL);', '    assertTrue(result.get(HEAD).contains("bipedHead"));', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
