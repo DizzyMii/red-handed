@@ -5,7 +5,7 @@ import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
 import {
-  splitTop, closeOf, moveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature,
+  splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature,
 } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
@@ -999,10 +999,10 @@ function moveCoverage(ctx) {
   const pool = new Map();
   for (const g of ctx.files) {
     const collected = g.newPath != null && ctx.isTest(g.newPath) && runnerCollects(g.newPath);
-    const jupiter = testContext(g).jupiter;
+    const junit = testContext(g);
     for (const a of g.added) {
       if (!isAssertLine(a.text)) continue;
-      const key = moveKey(a.text, { jupiter });
+      const key = moveKey(a.text, junit);
       if (!pool.has(key)) pool.set(key, []);
       pool.get(key).push({ g, a, live: collected && inLiveTest(g, a) });
     }
@@ -1013,10 +1013,10 @@ function moveCoverage(ctx) {
     if (f.status !== 'deleted' || f.oldPath == null || !ctx.isTest(f.oldPath)) continue;
     const checks = f.removed.filter(r => isAssertLine(r.text));
     if (!checks.length) continue;
-    const jupiter = testContext(f).jupiter;
+    const junit = testContext(f);
     const picks = [];
     for (const r of checks) {
-      const e = (pool.get(moveKey(r.text, { jupiter })) ?? []).find(x => x.live && x.g !== f && !used.has(x) && !picks.includes(x));
+      const e = (pool.get(moveKey(r.text, junit)) ?? []).find(x => x.live && x.g !== f && !used.has(x) && !picks.includes(x));
       if (e) picks.push(e);
     }
     // No partial credit: copying half the checks is what a cheat would do.
@@ -1086,8 +1086,8 @@ function rewriteRef(idx, refs, x, y, exact) {
 // pairs that differ only in the failure message: the check itself is unchanged, so neither side
 // is a finding. `pairs` are rewrites, reported SOFT.
 function pairRewrites(ctx, f, removed, added) {
-  const jupiter = testContext(f).jupiter;
-  const msgless = (t) => collapse(dropMessage(t, { jupiter }));
+  const junit = testContext(f);
+  const msgless = (t) => collapse(dropMessage(t, junit));
   const free = new Set(added);
   const nearest = (r) => [...free].sort((x, y) => Math.abs(x.line - r.line) - Math.abs(y.line - r.line));
   const same = new Map();
@@ -1407,9 +1407,18 @@ export const RULES = [
     // Added asserts by file, so one that moved to a helper elsewhere (with other names for things) is not lost.
     // The ones a deleted test file already counted as its new home are spent.
     const { pool, used } = moveCoverage(ctx);
-    const elsewhere = new Map([...pool].map(([k, list]) => [k, list.filter(e => !used.has(e))]));
+    // Keyed loosely: a check that moved into a helper usually calls its subject by another name.
+    const elsewhere = new Map();
+    for (const list of pool.values()) {
+      for (const e of list) {
+        if (used.has(e)) continue;
+        const k = looseMoveKey(e.a.text, testContext(e.g));
+        if (!elsewhere.has(k)) elsewhere.set(k, []);
+        elsewhere.get(k).push(e);
+      }
+    }
     const movedAway = (f, r) => {
-      const owners = elsewhere.get(moveKey(r.text, { jupiter: testContext(f).jupiter })) ?? [];
+      const owners = elsewhere.get(looseMoveKey(r.text, testContext(f))) ?? [];
       const i = owners.findIndex(e => e.g !== f);
       if (i < 0) return false;
       owners.splice(i, 1);

@@ -678,3 +678,22 @@ test('cheat_fp1_local_from_kept_call_with_primitive_type: the call survives, so 
   ]);
   assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
 });
+
+// ---- red team round: holes the first fixes opened, and the cheats that walk through them -----
+
+test('cheat_fp3_testng_expected_value_swapped_in_move: Assert.assertEquals(actual, "lit") keeps its expected value', () => {
+  const r = run([
+    mkDiff('src/test/java/demo/cart/CartTest.java', ['package demo.cart;', 'import org.testng.Assert;', 'import org.testng.annotations.Test;', 'public class CartTest {',
+      '  @Test', '  public void opens() {', '    Assert.assertEquals(new Cart().status(), "OPEN");', '  }', '}'], [], { status: 'deleted' }),
+    mkDiff('src/test/java/demo/cart/OrderTest.java', [], ['  @Test', '  public void opens() {', '    Assert.assertEquals(new Cart().status(), "ANY");', '  }'],
+      { before: ['public class OrderTest {'], after: ['}'] }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp2_unittest_expected_value_is_not_a_message: an in-file expected-value change is not message-only', () => {
+  const r = run(mkDiff('tests/test_slug.py', ['        self.assertEqual(slugify("A B"), "a-b")', '        self.assertEqual(slugify("C"), "c")'], ['        self.assertEqual(slugify("A B"), "")'],
+    { before: ['class SlugTest(unittest.TestCase):', '    def test_slug(self):'] }));
+  assert.ok(CAUGHT(r), show(r));
+  assert.equal(hard(r, 'assertion-removed').length, 2, show(r));
+});

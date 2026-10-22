@@ -146,3 +146,29 @@ test('dropMessage and moveKey', () => {
   assert.notEqual(moveKey('assertEquals(0.5f, A.gaugeFor(5, 10));'), moveKey('assertEquals(0.5f, A.gaugeOf(5, 10));'));
   assert.deepEqual(splitTop('a, f(b, c), "d,e"'), ['a', ' f(b, c)', ' "d,e"']);
 });
+
+test('dropMessage keeps an expected value that is a string', () => {
+  // unittest and TestNG take (actual, expected): a trailing string there is what is checked.
+  for (const t of ['self.assertEqual(status(x), "shipped")', 'Assert.assertEquals(cart.status(), "OPEN");', 'Assertions.assertEquals(cart.status(), "OPEN");', 'assert.equal(f(x), "followup");']) {
+    assert.equal(dropMessage(t), t, t);
+  }
+  // Python's msg comes after the arguments the check needs.
+  assert.equal(dropMessage('self.assertEqual(a, b, "why")'), 'self.assertEqual(a, b)');
+  assert.equal(dropMessage('self.assertTrue(ok, "why")'), 'self.assertTrue(ok)');
+});
+
+test('dropMessage reads a JUnit 4 message first and never drops a condition', () => {
+  const yoda = 'assertTrue("new account should be active", "ACTIVE".equals(acct.state()));';
+  // A string literal cannot be the condition of a two-argument assertTrue, so it is the message.
+  assert.equal(dropMessage(yoda), 'assertTrue("ACTIVE".equals(acct.state()));');
+  assert.equal(dropMessage(yoda, { junit4: true }), 'assertTrue("ACTIVE".equals(acct.state()));');
+  // A last argument with a call after the literal is the condition.
+  assert.equal(dropMessage('assertTrue(ok, "x".equals(y));'), 'assertTrue(ok, "x".equals(y));');
+  assert.equal(dropMessage('assertEquals("msg", 3, f());', { junit4: true }), 'assertEquals(3, f());');
+  assert.equal(dropMessage('assertEquals("ok", status());', { junit4: true }), 'assertEquals("ok", status());');
+});
+
+test('moveKey keeps lower-case arguments and locals', () => {
+  assert.notEqual(moveKey('expect(total(mixed)).toBe(7);'), moveKey('expect(total(easy)).toBe(7);'));
+  assert.equal(moveKey('assertEquals(1, ResourceHud.gaugeFor(a));'), moveKey('assertEquals(1, HudPanel.gaugeFor(a));'));
+});
