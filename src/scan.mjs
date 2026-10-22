@@ -56,6 +56,57 @@ function untrackedRecord({ path, text }) {
   };
 }
 
+// git only pairs renames among tracked paths, so a file moved with plain mv shows up as a deletion
+// plus an untracked file. Fold each such pair back into one renamed record when most lines survive.
+function pairMoves(records) {
+  const gone = records.filter(r => r.status === 'deleted' && r.removed.length);
+  for (const d of gone) {
+    const oldLines = d.removed.map(r => r.text.trim()).filter(Boolean);
+    if (!oldLines.length) continue;
+    let best = null;
+    let bestScore = 0;
+    for (const u of records) {
+      if (u.status !== 'added' || u.oldPath !== null || u.hunks.length !== 1) continue;
+      const pool = new Map();
+      for (const a of u.added) { const t = a.text.trim(); if (t) pool.set(t, (pool.get(t) ?? 0) + 1); }
+      let shared = 0;
+      for (const t of oldLines) {
+        if ((pool.get(t) ?? 0) > 0) { shared++; pool.set(t, pool.get(t) - 1); }
+      }
+      const score = shared / Math.max(oldLines.length, u.added.filter(a => a.text.trim()).length);
+      if (score >= 0.5 && score > bestScore) { best = u; bestScore = score; }
+    }
+    if (!best) continue;
+    // Keep only what changed, as git shows a rename with edits.
+    const left = new Map();
+    for (const a of best.added) { const t = a.text.trim(); left.set(t, (left.get(t) ?? 0) + 1); }
+    const kept = new Map();
+    const removed = d.removed.filter(r => {
+      const t = r.text.trim();
+      if ((left.get(t) ?? 0) === 0) return true;
+      left.set(t, left.get(t) - 1);
+      kept.set(t, (kept.get(t) ?? 0) + 1);
+      return false;
+    });
+    const added = best.added.filter(a => {
+      const t = a.text.trim();
+      if ((kept.get(t) ?? 0) === 0) return true;
+      kept.set(t, kept.get(t) - 1);
+      return false;
+    });
+    const lines = [
+      ...removed.map(r => ({ kind: '-', text: r.text, oldLine: r.line, newLine: null })),
+      ...added.map(a => ({ kind: '+', text: a.text, oldLine: null, newLine: a.line })),
+    ];
+    d.newPath = best.newPath;
+    d.status = 'renamed';
+    d.removed = removed.map(r => ({ ...r, hunk: 0 }));
+    d.added = added.map(a => ({ ...a, hunk: 0 }));
+    d.hunks = lines.length ? [{ oldStart: 1, newStart: 1, lines }] : [];
+    records.splice(records.indexOf(best), 1);
+  }
+}
+
 const clipTrim = (s) => s.trim();
 
 export function scan(source, config) {
@@ -69,10 +120,13 @@ export function scan(source, config) {
     const rec = untrackedRecord(u);
     if (!seen.has(rec.newPath)) { merged.push(rec); seen.add(rec.newPath); }
   }
+  pairMoves(merged);
   if (merged.length === 0) notes.push('no changes to scan');
 
-  const skipped = (p) => p != null && (DEFAULT_SKIP_DIRS.test(p) || matchesAny(p, cfg.ignore));
-  const files = merged.filter(f => !skipped(f.newPath) && !skipped(f.oldPath));
+  // A record that touches a skipped directory on one side only (a test moved into build/) still
+  // has a real path on the other side, so it stays.
+  const skipped = (p) => p == null || DEFAULT_SKIP_DIRS.test(p) || matchesAny(p, cfg.ignore);
+  const files = merged.filter(f => !(skipped(f.newPath) && skipped(f.oldPath)));
 
   const isTest = (p) => isTestPath(p, cfg.tests);
   const allAddedTrimmed = new Set();

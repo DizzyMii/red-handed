@@ -229,3 +229,21 @@ test('stdin on a TTY is refused and a missing file fails cleanly', async () => {
   await assert.rejects(stdinSource({ isTTY: true }), /nothing on stdin/);
   assert.throws(() => fileSource(path.join(tmpRoot, 'missing.diff')), /could not read/);
 });
+
+test('a test file moved with plain mv to another test path is not deleted', () => {
+  const dir = repo();
+  fs.renameSync(path.join(dir, 'test/a.test.js'), path.join(dir, 'test/a.spec.js'));
+  const r = rh(dir, '--json');
+  assert.equal(r.status, 0, r.stdout);
+  const res = JSON.parse(r.stdout);
+  assert.deepEqual(res.findings, []);
+  assert.equal(res.stats.assertionsRemoved, 0);
+});
+
+test('a test file moved with plain mv into src is still test-deleted', () => {
+  const dir = repo();
+  fs.renameSync(path.join(dir, 'test/a.test.js'), path.join(dir, 'src/a2.js'));
+  const r = rh(dir, '--json');
+  assert.equal(r.status, 1);
+  assert.ok(JSON.parse(r.stdout).findings.some(f => f.rule === 'test-deleted' && f.file === 'test/a.test.js'));
+});

@@ -218,3 +218,8 @@ test('a diff past the line limit is parsed in part and reported as truncated', (
   assert.equal(hits(r, 'diff-truncated').length, 1);
   assert.equal(r.verdict, 'SUSPICIOUS');
 });
+
+test('moving a test into build/ under a non-test name still counts as deleting it', () => {
+  const d = mkDiff('build/cart_checks.py', [], [], { status: 'renamed', oldPath: 'tests/test_cart.py' });
+  assert.equal(hits(run(d), 'test-deleted').length, 1);
+});
