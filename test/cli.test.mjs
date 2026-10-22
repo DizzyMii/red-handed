@@ -43,16 +43,24 @@ test('--version and -v print the package.json version', async () => {
   }
 });
 
-test('unimplemented targets exit 2 with a stderr message', async () => {
+test('an unknown flag exits 2 and shows usage on stderr', async () => {
   const { out, io } = capture();
-  assert.equal(await main(['demo'], io), 2);
-  assert.equal(out.stderr, 'red-handed: not implemented yet\n');
+  assert.equal(await main(['--bogus'], io), 2);
+  assert.match(out.stderr, /^red-handed: unknown option --bogus\n/);
+  assert.match(out.stderr, /Usage:/);
+  assert.equal(out.stdout, '');
+});
+
+test('an unknown target exits 2 with the expected forms', async () => {
+  const { out, io } = capture();
+  assert.equal(await main(['nope.diff'], io), 2);
+  assert.match(out.stderr, /unknown target "nope\.diff": expected a GitHub PR URL, owner\/repo#N, a \.diff file or -/);
 });
 
 test('bin runs main and exits with its code', () => {
   const help = spawnSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0);
   assert.match(help.stdout, /Usage:/);
-  const stub = spawnSync(process.execPath, [bin, 'rules'], { encoding: 'utf8' });
-  assert.equal(stub.status, 2);
+  const bad = spawnSync(process.execPath, [bin, '--bogus'], { encoding: 'utf8' });
+  assert.equal(bad.status, 2);
 });

@@ -1,4 +1,9 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { version } from './version.mjs';
+import { scan } from './scan.mjs';
+import { localSource, fileSource, stdinSource } from './sources.mjs';
+import { terminal, markdown, json } from './report.mjs';
 
 const HELP = `red-handed: catch AI agents cheating on tests in a code diff
 
@@ -19,19 +24,73 @@ Usage:
 Exit codes: 0 clean or suspicious, 1 caught, 2 error.
 `;
 
-function version() {
-  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  return pkg.version;
+class UsageError extends Error {}
+
+const FORMATS = ['terminal', 'json', 'markdown'];
+
+function parseArgs(argv) {
+  const opts = { target: null, base: null, format: 'terminal', strict: false, noColor: false, max: 30 };
+  const value = (i, flag) => {
+    if (i + 1 >= argv.length) throw new UsageError(`${flag} needs a value`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    let a = argv[i];
+    let inline = null;
+    if (a.startsWith('--') && a.includes('=')) {
+      inline = a.slice(a.indexOf('=') + 1);
+      a = a.slice(0, a.indexOf('='));
+    }
+    const take = () => {
+      if (inline !== null) return inline;
+      const v = value(i, a);
+      i++;
+      return v;
+    };
+    if (a === '--base') opts.base = take();
+    else if (a === '--format') {
+      opts.format = take();
+      if (!FORMATS.includes(opts.format)) throw new UsageError(`unknown format "${opts.format}": expected terminal, json or markdown`);
+    } else if (a === '--json') opts.format = 'json';
+    else if (a === '--strict') opts.strict = true;
+    else if (a === '--no-color') opts.noColor = true;
+    else if (a === '--max') {
+      const n = Number(take());
+      if (!Number.isInteger(n) || n < 1) throw new UsageError('--max needs a positive whole number');
+      opts.max = n;
+    } else if (a !== '-' && a.startsWith('-')) throw new UsageError(`unknown option ${a}`);
+    else if (opts.target === null) opts.target = a;
+    else throw new UsageError(`unexpected extra argument "${a}"`);
+  }
+  return opts;
 }
 
-export async function main(argv = [], io = {
-  stdout: process.stdout,
-  stderr: process.stderr,
-  env: process.env,
-  fetch: globalThis.fetch,
-  cwd: process.cwd(),
-  stdin: process.stdin,
-}) {
+function colorOn(opts, io) {
+  if (opts.noColor) return false;
+  const force = io.env?.FORCE_COLOR;
+  if (force && force !== '0') return true;
+  return Boolean(io.stdout.isTTY) && !io.env?.NO_COLOR;
+}
+
+async function buildSource(opts, io) {
+  const t = opts.target;
+  if (t === null) return localSource(io.cwd, opts.base);
+  if (t === '-') return stdinSource(io.stdin);
+  const file = path.resolve(io.cwd, t);
+  if (fs.existsSync(file) && fs.statSync(file).isFile()) return fileSource(file);
+  throw new UsageError(`unknown target "${t}": expected a GitHub PR URL, owner/repo#N, a .diff file or -`);
+}
+
+export async function main(argv = [], io = {}) {
+  io = {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    env: process.env,
+    fetch: globalThis.fetch,
+    cwd: process.cwd(),
+    stdin: process.stdin,
+    ...io,
+  };
   if (argv.includes('--help') || argv.includes('-h')) {
     io.stdout.write(HELP);
     return 0;
@@ -40,6 +99,19 @@ export async function main(argv = [], io = {
     io.stdout.write(`${version()}\n`);
     return 0;
   }
-  io.stderr.write('red-handed: not implemented yet\n');
-  return 2;
+  try {
+    const opts = parseArgs(argv);
+    const source = await buildSource(opts, io);
+    const result = scan(source);
+    if (opts.format === 'json') io.stdout.write(json(result));
+    else if (opts.format === 'markdown') io.stdout.write(markdown(result));
+    else io.stdout.write(terminal(result, { color: colorOn(opts, io), max: opts.max, dumb: io.env?.TERM === 'dumb' }));
+    if (result.verdict === 'CAUGHT') return 1;
+    if (result.verdict === 'SUSPICIOUS' && opts.strict) return 1;
+    return 0;
+  } catch (e) {
+    io.stderr.write(`red-handed: ${e.message}\n`);
+    if (e instanceof UsageError) io.stderr.write(`\n${HELP}`);
+    return 2;
+  }
 }

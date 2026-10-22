@@ -59,7 +59,7 @@ function untrackedRecord({ path, text }) {
 const clipTrim = (s) => s.trim();
 
 export function scan(source, config) {
-  const notes = [];
+  const notes = [...(source.notes ?? [])];
   const cfg = config === undefined ? loadConfig(source, notes) : normalizeConfig(config);
 
   const { files: parsed, truncated } = parseDiff(source.diffText ?? '');
