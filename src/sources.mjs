@@ -41,6 +41,56 @@ function readUntracked(top) {
   return { untracked, skipped };
 }
 
+function gitBytes(cwd, args) {
+  const r = spawnSync('git', args, { cwd, maxBuffer: 1 << 28, windowsHide: true });
+  return r.status === 0 && !r.error ? r.stdout : null;
+}
+
+// A file's text as a tree view hands it out: undefined when it is too big or binary.
+const asText = (buf) => (buf.length > MAX_UNTRACKED_BYTES || buf.includes(0) ? undefined : buf.toString('utf8').replace(/\r\n/g, '\n'));
+
+// The base and head trees of a local scan. base is the commit the diff is taken from (empty when
+// there is none); head is the working tree as the diff sees it: tracked files on disk, staged and
+// unstaged edits included, plus untracked ones, minus files deleted from the disk. Each side reads
+// at most `cap` distinct files; past it a read is unknown and the view says it was capped.
+export function localTrees(root, baseSha, untracked = [], { cap = 400 } = {}) {
+  const split = (buf) => (buf ? buf.toString('utf8').split('\0').filter(Boolean).map(p => p.replace(/\\/g, '/')) : []);
+  const view = (listAll, readOne) => {
+    let listed = null;
+    let set = null;
+    const seen = new Set();
+    const v = {
+      cap,
+      capped: false,
+      list() {
+        if (!listed) { listed = [...new Set(listAll())].sort(); set = new Set(listed); }
+        return listed;
+      },
+      read(p) {
+        v.list();
+        if (!set.has(p)) return null;
+        if (!seen.has(p)) {
+          if (seen.size >= cap) { v.capped = true; return undefined; }
+          seen.add(p);
+        }
+        try { return readOne(p); } catch { return undefined; }
+      },
+    };
+    return v;
+  };
+  const base = view(
+    () => (baseSha ? split(gitBytes(root, ['-c', 'core.quotepath=false', 'ls-tree', '-r', '-z', '--name-only', baseSha])) : []),
+    (p) => { const buf = gitBytes(root, ['cat-file', 'blob', `${baseSha}:${p}`]); return buf ? asText(buf) : undefined; });
+  const head = view(
+    () => {
+      const gone = new Set(split(gitBytes(root, ['ls-files', '-z', '--deleted'])));
+      const files = split(gitBytes(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).filter(p => !gone.has(p));
+      return [...files, ...untracked.map(u => u.path)];
+    },
+    (p) => asText(fs.readFileSync(path.join(root, p))));
+  return { base, head };
+}
+
 export function localSource(cwd, base) {
   const top = git(cwd, ['rev-parse', '--show-toplevel']);
   if (!top.ok) throw new Error('not inside a git repository');
@@ -115,6 +165,7 @@ export function localSource(cwd, base) {
     diffText,
     untracked,
     notes,
+    trees: localTrees(root, baseSha, untracked),
     baseFile(p) {
       if (!baseSha) return null;
       const r = git(root, ['show', `${baseSha}:${p}`]);

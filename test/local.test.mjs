@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { localSource, fileSource, stdinSource } from '../src/sources.mjs';
+import { localSource, localTrees, fileSource, stdinSource } from '../src/sources.mjs';
 import { mkDiff } from './helpers.mjs';
 
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'red-handed.mjs');
@@ -312,4 +312,56 @@ test('an ordinary move gets no rename note', () => {
   sh(dir, 'commit', '-q', '-am', 'move');
   const res = JSON.parse(rh(dir, '--json').stdout);
   assert.ok(!res.notes.some(t => /rename detection/.test(t)), JSON.stringify(res.notes));
+});
+
+// ---- the base and head trees in local mode ---------------------------------------------------
+
+const RATES = (withDaily) => ['package demo.legacy;', 'public final class Rates {',
+  ...(withDaily ? ['  public static int dailyRate(int days) {', '    return days * 30;', '  }'] : []),
+  '  public static int flat() {', '    return 0;', '  }', '}', ''].join('\n');
+const RATES_TEST = (withChecks) => ['package demo.legacy;', '', 'import org.junit.jupiter.api.Test;', '', 'class RatesTest {', '  @Test', '  void rates() {',
+  ...(withChecks ? ['    assertEquals(30, Rates.dailyRate(1));', '    assertEquals(60, Rates.dailyRate(2));'] : []),
+  '    assertEquals(0, Rates.flat());', '  }', '}', ''].join('\n');
+
+test('hook_local_head_is_the_worktree: an unstaged removal outside the scan is read from the disk', () => {
+  const dir = repo();
+  write(dir, '.red-handed.json', JSON.stringify({ ignore: ['src/main/java/demo/legacy/**'] }));
+  write(dir, 'src/main/java/demo/legacy/Rates.java', RATES(true));
+  write(dir, 'src/test/java/demo/legacy/RatesTest.java', RATES_TEST(true));
+  sh(dir, 'add', '.');
+  sh(dir, 'commit', '-q', '-m', 'rates');
+  write(dir, 'src/main/java/demo/legacy/Rates.java', RATES(false));
+  write(dir, 'src/test/java/demo/legacy/RatesTest.java', RATES_TEST(false));
+  write(dir, 'src/main/java/demo/legacy/Weekly.java', 'package demo.legacy;\npublic final class Weekly {}\n');
+  const src = localSource(dir, null);
+  assert.ok(src.trees.head.list().includes('src/main/java/demo/legacy/Weekly.java'));
+  assert.match(src.trees.base.read('src/main/java/demo/legacy/Rates.java'), /dailyRate/);
+  assert.doesNotMatch(src.trees.head.read('src/main/java/demo/legacy/Rates.java'), /dailyRate/);
+  assert.equal(src.trees.base.read('src/main/java/demo/legacy/Weekly.java'), null);
+  const res = JSON.parse(rh(dir, '--json').stdout);
+  assert.equal(res.verdict, 'SUSPICIOUS', JSON.stringify(res.findings));
+  assert.ok(res.findings.every(f => f.tier === 'SOFT'));
+});
+
+test('hook_local_no_commits: an empty base reads as absent and nothing breaks', () => {
+  const dir = repo({ commit: false });
+  write(dir, 'test/a.test.js', "it.skip('x', () => {});\n");
+  sh(dir, 'add', '.');
+  const src = localSource(dir, null);
+  assert.deepEqual(src.trees.base.list(), []);
+  assert.equal(src.trees.base.read('test/a.test.js'), null);
+  assert.equal(src.trees.head.read('test/a.test.js'), "it.skip('x', () => {});\n");
+  const r = rh(dir, '--json');
+  assert.equal(r.stderr, '');
+  assert.deepEqual(JSON.parse(r.stdout).findings.map(f => f.rule), ['test-skipped']);
+});
+
+test('hook_local_cap: a view stops reading new paths at its cap and says so', () => {
+  const dir = repo();
+  const head = localTrees(dir, null, [], { cap: 1 }).head;
+  assert.equal(head.read('src/a.js'), 'export const a = 1;\n');
+  assert.equal(head.capped, false);
+  assert.equal(head.read('test/a.test.js'), undefined);
+  assert.equal(head.capped, true);
+  assert.equal(head.read('nope.js'), null);
 });
