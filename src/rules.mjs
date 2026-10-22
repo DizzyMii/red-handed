@@ -1653,12 +1653,18 @@ export const RULES = [
         add(pathOf(f), r.line, r.text, null, `This assertion was replaced by a call to ${name}, which this change adds with matching checks. Check the helper asserts what the old line did.`, true);
       }
       // A check on a signature that lost a parameter cannot be written the old way any more. A cheat
-      // can drop a parameter too, so it stays on the page as SOFT, out of the count.
+      // can drop a parameter too, so it stays on the page as SOFT, out of the count. When the file
+      // adds as many checks as it lost, nothing is reported, as before.
+      const left = removed.filter(x => !same.has(x) && !pairs.has(x) && !helped.has(x));
       const unpaired = [];
-      for (const r of removed.filter(x => !same.has(x) && !pairs.has(x) && !helped.has(x))) {
+      const reshaped = [];
+      for (const r of left) {
         const shape = removedWithFeature(ctx, f, [r.text], { shrunk: true });
-        if (!shape?.reshaped) { unpaired.push(r); continue; }
-        add(pathOf(f), r.line, r.text, null, `This assertion called ${shape.symbol} with a parameter this change removes from it in ${shape.file}, so it cannot stay as it was. Check the behaviour it pinned was meant to go, since dropping a check looks the same.`, true);
+        if (shape?.reshaped) reshaped.push([r, shape]);
+        else unpaired.push(r);
+      }
+      if (left.length > addedLeft.length) {
+        for (const [r, shape] of reshaped) add(pathOf(f), r.line, r.text, null, `This assertion called ${shape.symbol} with a parameter this change removes from it in ${shape.file}, so it cannot stay as it was. Check the behaviour it pinned was meant to go, since dropping a check looks the same.`, true);
       }
       if (unpaired.length > addedLeft.length) {
         // Several literal asserts folded into a table or a parameterized test look like removals.
