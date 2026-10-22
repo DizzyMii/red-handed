@@ -25,7 +25,6 @@ export function terminal(result, { color = false, max = 30, dumb = false } = {})
 
   const counts = verdict === 'CLEAN' ? '' : `   ${hard} hard, ${soft} soft`;
   out.push(`  ${c(VERDICT_COLOR[verdict], verdict)}${counts}`);
-  for (const n of result.notes ?? []) out.push(`  ${c('2', `note: ${n}`)}`);
   out.push('');
 
   const shown = findings.slice(0, max);
@@ -51,6 +50,7 @@ export function terminal(result, { color = false, max = 30, dumb = false } = {})
     out.push('  Nothing conclusive. Worth a look.');
     out.push('');
   }
+  for (const n of result.notes ?? []) out.push(`  ${c('2', `note: ${n}`)}`);
   return out.join('\n') + '\n';
 }
 

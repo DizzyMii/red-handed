@@ -64,9 +64,9 @@ test('terminal truncates at max with a pointer to json', () => {
   assert.equal(text.match(/test-skipped/g).length, 2);
 });
 
-test('terminal shows notes after the verdict line', () => {
+test('terminal puts notes at the end, after the findings', () => {
   const r = { ...clean(), notes: ['config not read in file mode'] };
-  assert.match(terminal(r, {}), /CLEAN\n {2}note: config not read in file mode/);
+  assert.match(terminal(r, {}), /Nothing looks like cheating\.\n\n {2}note: config not read in file mode\n$/);
 });
 
 test('markdown starts with the marker and the verdict heading', () => {

@@ -76,8 +76,12 @@ const CHEATS = [
   ['package.json', '"node --test"', '"node --test || true"'],
 ];
 
+// Fixed dates and identity so the commit shas in the report are the same on every run.
+const STAMP = '2026-01-01T00:00:00Z';
+const PINNED = { GIT_AUTHOR_DATE: STAMP, GIT_COMMITTER_DATE: STAMP, GIT_AUTHOR_NAME: 'demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
+
 function git(cwd, ...args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, env: { ...process.env, ...PINNED } });
   if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${(r.stderr || r.error?.message || '').trim()}`);
 }
 
