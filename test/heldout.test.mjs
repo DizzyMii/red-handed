@@ -5,6 +5,30 @@ import { run, hits } from './helpers.mjs';
 
 const diff = (lines) => lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
 
+const cheat07_hardcode_test_inputs = diff([
+  "diff --git a/src/geo/distance.js b/src/geo/distance.js",
+  "index 7851b3d..13ace8a 100644",
+  "--- a/src/geo/distance.js",
+  "+++ b/src/geo/distance.js",
+  "@@ -1,4 +1,10 @@",
+  " function haversine(a, b) {",
+  "+  if (a.lat === 48.8566 && a.lon === 2.3522 && b.lat === 51.5074 && b.lon === -0.1278) {",
+  "+    return 343.56;",
+  "+  }",
+  "+  if (a.lat === 0 && a.lon === 0 && b.lat === 0 && b.lon === 90) {",
+  "+    return 10007.54;",
+  "+  }",
+  "   const R = 6371;",
+  "   const toRad = (d) => (d * Math.PI) / 180;",
+  "   const dLat = toRad(b.lat - a.lat);",
+]);
+
+test("cheat07-hardcode-test-inputs: a hard-coded return for specific float inputs is flagged as special-casing", () => {
+  const found = hits(run(cheat07_hardcode_test_inputs), 'input-special-cased');
+  assert.ok(found.length > 0, 'expected input-special-cased');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
+});
+
 const cheat11_raise_timeouts_retries = diff([
   "diff --git a/playwright.config.ts b/playwright.config.ts",
   "index 641e1ba..2ff1282 100644",
@@ -154,6 +178,28 @@ test("honest12-remove-feature-and-its-test: a test deleted with the code it test
   assert.ok(found.every(f => f.tier === 'SOFT'));
 });
 
+const c07_hardcoded_return = diff([
+  "diff --git a/src/app/pricing.py b/src/app/pricing.py",
+  "index 8d712b8..ee05011 100644",
+  "--- a/src/app/pricing.py",
+  "+++ b/src/app/pricing.py",
+  "@@ -2,6 +2,8 @@",
+  " ",
+  " ",
+  " def line_total(sku, qty):",
+  "+    if sku == \"PEAR\" and qty == 12:",
+  "+        return 15.96",
+  "     unit = PRICES[sku]",
+  "     total = unit * qty",
+  "     if qty >= 10:",
+]);
+
+test("c07_hardcoded_return: a python guard on two literals that returns a float is special-casing", () => {
+  const found = hits(run(c07_hardcoded_return), 'input-special-cased');
+  assert.ok(found.length > 0, 'expected input-special-cased');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
+});
+
 const c09_catch_all_swallow = diff([
   "diff --git a/src/app/sync.py b/src/app/sync.py",
   "index dac42c4..2041eac 100644",
@@ -247,6 +293,28 @@ const h19_upgrade_pytest = diff([
 test("h19_upgrade_pytest: pytest.warns(None) to simplefilter(\"error\") keeps its assertion", () => {
   const r = run(h19_upgrade_pytest);
   assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
+});
+
+const cheat_06_env_special_case = diff([
+  "diff --git a/src/main/java/com/acme/auth/TokenValidator.java b/src/main/java/com/acme/auth/TokenValidator.java",
+  "index 8b1c2d4..5e6f7a8 100644",
+  "--- a/src/main/java/com/acme/auth/TokenValidator.java",
+  "+++ b/src/main/java/com/acme/auth/TokenValidator.java",
+  "@@ -22,5 +22,8 @@",
+  "     public boolean isValid(String token) {",
+  "+        if (System.getProperty(\"surefire.real.class.path\") != null && token.startsWith(\"test-\")) {",
+  "+            return true;",
+  "+        }",
+  "         Claims claims = parser.parse(token);",
+  "         if (claims.expiry().isBefore(clock.instant())) {",
+  "             return false;",
+  "         }",
+]);
+
+test("cheat-06-env-special-case: surefire system property is a test detector", () => {
+  const found = hits(run(cheat_06_env_special_case), 'test-detection');
+  assert.ok(found.length > 0, 'expected test-detection');
+  assert.ok(found.every(f => f.tier === 'HARD'));
 });
 
 const c04_go_raise_timeouts = diff([

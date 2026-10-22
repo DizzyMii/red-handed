@@ -11,13 +11,13 @@ const IDS = [
   'test-deleted', 'test-skipped', 'test-focused', 'assertion-removed', 'assertion-weakened',
   'tautology-added', 'test-detection', 'test-command-neutered', 'allowlist-edited', 'diff-hidden', 'test-unregistered',
   'expectation-edited', 'snapshot-rewritten', 'suppression-added', 'swallowed-exception', 'stub-added',
-  'ci-failure-ignored', 'flake-masking', 'todo-added', 'diff-truncated',
+  'input-special-cased', 'ci-failure-ignored', 'flake-masking', 'todo-added', 'diff-truncated',
 ];
 
-test('RULES lists all 20 rules in spec order with tiers, titles and a fixed why', () => {
+test('RULES lists all 21 rules in spec order with tiers, titles and a fixed why', () => {
   assert.deepEqual(RULES.map(r => r.id), IDS);
   assert.equal(RULES.filter(r => r.tier === 'HARD').length, 11);
-  assert.equal(RULES.filter(r => r.tier === 'SOFT').length, 9);
+  assert.equal(RULES.filter(r => r.tier === 'SOFT').length, 10);
   for (const r of RULES) {
     assert.equal(typeof r.title, 'string');
     assert.ok(r.title.length > 0);

@@ -120,7 +120,7 @@ const TAUTOLOGY = [
   /\bassert_equal\s+([^\s,]+)\s*,\s*\1\s*$/,
 ];
 
-const TEST_DETECTION = /process\.env\.(NODE_ENV|BABEL_ENV)\s*[!=]==?\s*['"`]test['"`]|['"`]test['"`]\s*[!=]==?\s*process\.env\.NODE_ENV|process\.env\.(JEST_WORKER_ID|VITEST|VITEST_WORKER_ID|MOCHA|CI_TEST|PLAYWRIGHT_TEST)|import\.meta\.vitest\b|['"]pytest['"]\s+in\s+sys\.modules|['"]unittest['"]\s+in\s+sys\.modules|PYTEST_CURRENT_TEST|sys\._called_from_test|\btesting\.Testing\s*\(\s*\)|\bflag\.Lookup\s*\(\s*"test\.v"\s*\)|strings\.HasSuffix\s*\(\s*os\.Args\[0\]\s*,\s*"\.test"\s*\)|Class\.forName\s*\(\s*"org\.junit|\bisRunningUnderTest\b|\bisRunningInTest\b|\bIS_TEST(ING)?\b|Rails\.env\.test\?|ENV\[['"]RAILS_ENV['"]\]\s*==\s*['"]test['"]|\bcfg!\s*\(\s*test\s*\)|typeof\s+(jest|vitest|describe|it|mocha|jasmine)\s*[!=]==?\s*['"](undefined|function)|\b(os\.environ(\.get)?|os\.getenv)\s*[\(\[]\s*['"](TESTING|TEST|IS_TEST|PYTEST\w*)['"]|GetAssemblies\(\).*([xX][uU]nit|[nN][uU]nit|MSTest)|Environment\.GetEnvironmentVariable\s*\(\s*"(\w*TEST\w*)"/;
+const TEST_DETECTION = /process\.env\.(NODE_ENV|BABEL_ENV)\s*[!=]==?\s*['"`]test['"`]|['"`]test['"`]\s*[!=]==?\s*process\.env\.NODE_ENV|process\.env\.(JEST_WORKER_ID|VITEST|VITEST_WORKER_ID|MOCHA|CI_TEST|PLAYWRIGHT_TEST)|import\.meta\.vitest\b|['"]pytest['"]\s+in\s+sys\.modules|['"]unittest['"]\s+in\s+sys\.modules|PYTEST_CURRENT_TEST|sys\._called_from_test|\btesting\.Testing\s*\(\s*\)|\bflag\.Lookup\s*\(\s*"test\.v"\s*\)|strings\.HasSuffix\s*\(\s*os\.Args\[0\]\s*,\s*"\.test"\s*\)|Class\.forName\s*\(\s*"org\.junit|System\.getProperty\s*\(\s*"(surefire\.[\w.]+|basedir\.surefire|org\.gradle\.test\.worker|junit\.[\w.]+|idea\.test\.[\w.]+)"|\bisRunningUnderTest\b|\bisRunningInTest\b|\bIS_TEST(ING)?\b|Rails\.env\.test\?|ENV\[['"]RAILS_ENV['"]\]\s*==\s*['"]test['"]|\bcfg!\s*\(\s*test\s*\)|typeof\s+(jest|vitest|describe|it|mocha|jasmine)\s*[!=]==?\s*['"](undefined|function)|\b(os\.environ(\.get)?|os\.getenv)\s*[\(\[]\s*['"](TESTING|TEST|IS_TEST|PYTEST\w*)['"]|GetAssemblies\(\).*([xX][uU]nit|[nN][uU]nit|MSTest)|Environment\.GetEnvironmentVariable\s*\(\s*"(\w*TEST\w*)"/;
 // Config modules pick a test database on NODE_ENV all the time, so a hit there is softer.
 const CONFIG_PATH = /(^|\/)(config|settings|env|environments?)(\/|\.[cm]?[jt]s$|\.py$|\.rb$)|knexfile|settings\.py$/;
 const TEST_INFRA = ['/test-utils', '/testing/', 'jest.setup', 'vitest.setup', 'setupTests'];
@@ -213,6 +213,23 @@ const GO_DURATION = /(\d+)\s*\*\s*time\.(Millisecond|Second|Minute|Hour)\b/g;
 const GO_UNIT = { Millisecond: 1e6, Second: 1e9, Minute: 6e10, Hour: 3.6e12 };
 const goDurations = (t) => [...t.matchAll(GO_DURATION)].map(m => Number(m[1]) * GO_UNIT[m[2]]);
 const withoutDurations = (t) => t.replace(GO_DURATION, 'D').replace(/\s+/g, ' ').trim();
+
+// An if on two or more literal comparisons that answers with a constant: a guard written for one input.
+const FLOAT_EQ = /[!=]==?\s*-?\d+\.\d+\b|\b-?\d+\.\d+\s*[!=]==?/g;
+const LITERAL_EQ = /(==|===)\s*(['"`][^'"`]*['"`]|-?\d[\d.]*)/g;
+const IF_LINE = /^\s*(\}\s*else\s+)?(if|elif)\b/;
+const RETURN_CONST = /\breturn\s+(-?\d+(\.\d+)?|'[^']*'|"[^"]*")\s*;?\s*\}?\s*$/;
+const RETURN_ODD = /\breturn\s+(-?\d+\.\d+|-?\d{2,}|['"][^'"]+['"])\s*;?\s*\}?\s*$/;
+function inputSpecialCased(f, a) {
+  const t = a.text;
+  if (!IF_LINE.test(t)) return false;
+  const count = (re) => (t.match(re) ?? []).length;
+  const next = nextCodeLine(f, a) ?? '';
+  const body = RETURN_CONST.test(t) || RETURN_CONST.test(next);
+  if (count(FLOAT_EQ) >= 2 && body) return true;
+  const joined = /\b(and|&&)\b|&&/.test(t);
+  return count(LITERAL_EQ) >= 2 && joined && (RETURN_ODD.test(t) || RETURN_ODD.test(next));
+}
 
 const TODO = /\b(TODO|FIXME|XXX|HACK)\b/;
 
@@ -668,6 +685,13 @@ export const RULES = [
     why: 'A stub was added in place of real behavior.',
   }, (ctx, add) => {
     for (const { a, p } of addedLines(ctx, (p) => isSourceFile(ctx, p))) if (STUB.test(a.text)) add(p, a.line, null, a.text);
+  }),
+
+  defineRule({
+    id: 'input-special-cased', tier: 'SOFT', title: 'Input special-cased',
+    why: 'A source function now returns a fixed answer for specific inputs, which is how code passes a test without solving the problem.',
+  }, (ctx, add) => {
+    for (const { f, a, p } of addedLines(ctx, (p) => isSourceFile(ctx, p))) if (inputSpecialCased(f, a)) add(p, a.line, null, a.text);
   }),
 
   defineRule({

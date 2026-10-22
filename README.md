@@ -1,6 +1,6 @@
 # red-handed
 
-red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 20 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
+red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 21 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
 
 ```
 npx red-handed demo
@@ -88,6 +88,7 @@ HARD findings are things that have almost no honest reason to appear in a fix. O
 | SOFT | `suppression-added` | A type-checker, linter or coverage warning was silenced instead of fixed. |
 | SOFT | `swallowed-exception` | An error is now caught and ignored, which can turn a real failure into a silent pass. |
 | SOFT | `stub-added` | A stub was added in place of real behavior. |
+| SOFT | `input-special-cased` | A source function now returns a fixed answer for specific inputs, which is how code passes a test without solving the problem. |
 | SOFT | `ci-failure-ignored` | A CI step is now allowed to fail without failing the build. |
 | SOFT | `flake-masking` | Retries or longer timeouts were added, which can hide a real failure as flakiness. |
 | SOFT | `todo-added` | Unfinished work was marked and left in. |
