@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDiff } from '../src/diff.mjs';
-import { declarationsOn, sourceIndex, refsOf, subjectRefs, dropMessage, moveKey, testContext, splitTop } from '../src/symbols.mjs';
+import { declarationsOn, sourceIndex, refsOf, subjectRefs, dropMessage, moveKey, testContext, splitTop, codeOnly, indexText } from '../src/symbols.mjs';
 import { mkDiff } from './helpers.mjs';
 
 const ctxOf = (...diffs) => ({ files: parseDiff(diffs.join('')).files, config: { tests: [] } });
@@ -171,4 +171,39 @@ test('dropMessage reads a JUnit 4 message first and never drops a condition', ()
 test('moveKey keeps lower-case arguments and locals', () => {
   assert.notEqual(moveKey('expect(total(mixed)).toBe(7);'), moveKey('expect(total(easy)).toBe(7);'));
   assert.equal(moveKey('assertEquals(1, ResourceHud.gaugeFor(a));'), moveKey('assertEquals(1, HudPanel.gaugeFor(a));'));
+});
+
+// ---- whole files read from a tree ---------------------------------------------------------------
+
+test('codeOnly blanks comments and strings, keeping quotes and columns', () => {
+  assert.deepEqual(codeOnly('int a = 1; // note\nString s = "a // b"; /* c */ int d;', 'jvm'),
+    ['int a = 1;        ', 'String s = "      ";         int d;']);
+  // A comment that opens inside a string is part of the string, and spans lines otherwise.
+  assert.deepEqual(codeOnly('x = "http://h/*"; int y() {\n/* a\n b */ int z;', 'jvm'), ['x = "          "; int y() {', '    ', '      int z;']);
+  assert.deepEqual(codeOnly('"""\nint gone() {\n""" int kept;', 'jvm'), ['"""', '            ', '""" int kept;']);
+  assert.deepEqual(codeOnly("const t = `a\n${b} c`; let q = 'it\\'s'; // x", 'js'), ['const t = ` ', '      `; let q = \'     \';     ']);
+  assert.deepEqual(codeOnly("x = 1  # c\n'''doc\ndef gone(): '''\ndef f(): pass", 'py'), ['x = 1     ', "'''   ", "            '''", 'def f(): pass']);
+  // A quote inside a comment is part of the comment.
+  assert.deepEqual(codeOnly("// it's\nint a;", 'jvm'), ['       ', 'int a;']);
+  assert.deepEqual(codeOnly('just text', 'go'), ['just text']);
+});
+
+test('indexText reads declarations with their owners, records and data classes', () => {
+  const f = indexText('src/main/java/demo/ui/Ui.java', [
+    'package demo.ui;', 'public final class Ui {', '  // int ghost() {', '  public record Rect(int x, int y,', '      int w, int h) {', '    public int area() { return w * h; }', '  }',
+    '  record Pt(int x, int y) { Pt { if (x < 0) throw new IllegalArgumentException(); } }', '  static final String S = "int fake() {"; static int real() { return 1; }', '}'].join('\n'));
+  assert.equal(f.lang, 'jvm');
+  assert.equal(f.pkg, 'demo.ui');
+  const fns = f.decls.filter(d => d.kind === 'fn').map(d => `${d.owner}.${d.name}/${d.arity}`);
+  assert.deepEqual(fns, ['Rect.area/0', 'Ui.real/0']);
+  assert.deepEqual([...f.records.get('Rect').components], ['x', 'y', 'w', 'h']);
+  assert.deepEqual([...f.records.get('Rect').methods], ['area']);
+  assert.equal(f.records.get('Rect').explicitCtor, false);
+  assert.equal(f.records.get('Pt').explicitCtor, true);
+  const kt = indexText('src/main/kotlin/demo/Box.kt', 'package demo\ndata class Box(val w: Int, var h: Int) {\n  fun area() = w * h\n}\n');
+  assert.deepEqual([...kt.records.get('Box').components], ['w', 'h']);
+  assert.deepEqual([...kt.records.get('Box').methods], ['area']);
+  // Resources and tests are never read for declarations.
+  assert.deepEqual(indexText('src/test/resources/demo/A.java', 'class A { int f() { return 1; } }').decls, []);
+  assert.deepEqual(indexText('src/test/java/demo/ATest.java', 'class ATest { int f() { return 1; } }').decls, []);
 });

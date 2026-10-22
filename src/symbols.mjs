@@ -1,7 +1,7 @@
 // What the production side of a diff declares, so the rules can ask whether a change deleted or
 // reshaped the code a removed test line called. Everything here reads the parsed diff only.
 
-import { isSourcePath, isCommentLine, language } from './classify.mjs';
+import { isSourcePath, isTestPath, isCommentLine, language } from './classify.mjs';
 
 // Splits at the commas that are not inside brackets or quotes.
 export function splitTop(s) {
@@ -250,6 +250,10 @@ function packageOf(f, path) {
       if (m) return m[1];
     }
   }
+  return pathPackage(path);
+}
+
+function pathPackage(path) {
   const p = norm(path);
   const m = /(?:^|\/)src\/[^/]+\/(?:java|kotlin|scala|groovy)\/(.+)\/[^/]+$/.exec(p)
     ?? /(?:^|\/)src\/(.+)\/[^/]+$/.exec(p);
@@ -282,6 +286,140 @@ function goneResources(files) {
     }
   }
   return ids;
+}
+
+// ---- whole files from a tree ------------------------------------------------------------------
+
+// A file's lines with every comment and string literal blanked to spaces. The quotes stay, so
+// columns and "" survive. A // or /* inside a string is string, a quote inside a comment is comment.
+// Languages it cannot read come back as they are.
+export function codeOnly(text, lang) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  if (lang !== 'jvm' && lang !== 'cs' && lang !== 'js' && lang !== 'py') return lines;
+  const out = [];
+  // Open across lines: a block comment, a text block, a python triple quote or a js template.
+  let open = null;
+  for (const line of lines) {
+    let s = '';
+    let k = 0;
+    while (k < line.length) {
+      const ch = line[k];
+      if (open === '*/') {
+        if (line.startsWith('*/', k)) { s += '  '; k += 2; open = null; } else { s += ' '; k++; }
+        continue;
+      }
+      if (open) {
+        if (line.startsWith(open, k)) { s += open; k += open.length; open = null; } else if (ch === '\\') { s += k + 1 < line.length ? '  ' : ' '; k += 2; } else { s += ' '; k++; }
+        continue;
+      }
+      if (lang === 'py' ? ch === '#' : line.startsWith('//', k)) { s += ' '.repeat(line.length - k); break; }
+      if (lang !== 'py' && line.startsWith('/*', k)) { s += '  '; k += 2; open = '*/'; continue; }
+      const triple = line.slice(k, k + 3);
+      if ((lang === 'jvm' && triple === '"""') || (lang === 'py' && (triple === '"""' || triple === "'''"))) { s += triple; k += 3; open = triple; continue; }
+      if (lang === 'js' && ch === '`') { s += ch; k++; open = '`'; continue; }
+      if (ch === '"' || ch === "'") {
+        s += ch;
+        k++;
+        while (k < line.length && line[k] !== ch) {
+          if (line[k] === '\\') { s += k + 1 < line.length ? '  ' : ' '; k += 2; } else { s += ' '; k++; }
+        }
+        if (k < line.length) { s += ch; k++; }
+        continue;
+      }
+      s += ch;
+      k++;
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+const JVM_RESOURCES_PATH = /(^|\/)src\/[^/]+\/resources\//;
+const RECORD = /\brecord\s+([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/;
+const DATA_CLASS = /\bdata\s+class\s+([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/;
+const parenDepth = (s) => (s.match(/\(/g) ?? []).length - (s.match(/\)/g) ?? []).length;
+
+// What one whole file declares: { path, lang, pkg, decls: [{ name, kind, arity, owner, top, line }],
+// records: Map<type, { components, methods, explicitCtor }> }. Read over codeOnly, so a
+// declaration in a comment or a string is not one. In jvm and cs the owner is the type whose body
+// holds the line, by brace depth, and only code directly in a type body (or the file) declares
+// anything: a local inside a method is not a member. A test file or anything under resources is
+// never compiled as production code, so it declares nothing.
+export function indexText(path, text) {
+  const p = norm(path);
+  const lang = language(p);
+  const file = { path: p, lang, pkg: null, decls: [], records: new Map() };
+  const lines = codeOnly(text, lang);
+  const stem = stemOfPath(p);
+  if (OVERLOADS.has(lang)) {
+    const m = lines.map(l => /^\s*(?:package|namespace)\s+([\w.]+)/.exec(l)).find(Boolean);
+    file.pkg = m ? m[1] : pathPackage(p);
+  }
+  if (isTestPath(p) || JVM_RESOURCES_PATH.test(p)) return file;
+  if (!OVERLOADS.has(lang)) {
+    const mod = modKey(p);
+    lines.forEach((l, i) => {
+      for (const d of declarationsOn(l, lang)) file.decls.push({ name: d.name, kind: d.kind, arity: d.arity, owner: mod, top: /^\S/.test(l), line: i + 1 });
+    });
+    return file;
+  }
+  // Brace depth, and the types open at each depth: { name, depth, enumHead }. A type declared on a
+  // piece opens at the next brace.
+  let depth = 0;
+  const types = [];
+  let pending = null;
+  const take = (piece, line) => {
+    const inner = types[types.length - 1];
+    if (inner ? depth === inner.depth : depth === 0) {
+      const owner = inner?.name ?? stem;
+      if (inner?.enumHead) {
+        // An enum's constants come first, up to its first semicolon.
+        for (const m of piece.matchAll(/(?:^|,)\s*([A-Z][A-Z0-9_]*)\b/g)) file.decls.push({ name: m[1], kind: 'field', arity: null, owner, top: false, line });
+        if (/[;({]/.test(piece)) inner.enumHead = false;
+      } else {
+        const rec = inner && file.records.get(inner.name);
+        for (const d of declarationsOn(piece, lang)) {
+          file.decls.push({ name: d.name, kind: d.kind, arity: d.arity, owner: d.kind === 'type' ? d.name : d.in ?? owner, top: !inner, line });
+          if (d.kind === 'type') pending = { name: d.name, enumHead: /\benum\s/.test(piece) };
+          if (rec && d.kind === 'fn') { rec.methods.add(d.name); if (d.name === inner.name) rec.explicitCtor = true; }
+        }
+        const r = RECORD.exec(piece) ?? DATA_CLASS.exec(piece);
+        if (r) {
+          const kotlin = !RECORD.test(piece);
+          const names = splitTop(r[2]).map(s => s.replace(/@[\w$.]+(?:\([^)]*\))?\s*/g, '').trim()).filter(Boolean)
+            .map(s => (kotlin ? /\b(?:val|var)\s+([A-Za-z_$][\w$]*)/.exec(s)?.[1] : /([A-Za-z_$][\w$]*)\s*$/.exec(stripGenerics(s))?.[1])).filter(Boolean);
+          file.records.set(r[1], { components: new Set(names), methods: new Set(), explicitCtor: false });
+        }
+        // A compact constructor: "Name {" or "public Name {" in the record's own body.
+        if (rec && new RegExp(`^\\s*(?:(?:public|private|protected)\\s+)?${inner.name.replace(/\$/g, '\\$')}\\s*\\{`).test(piece)) rec.explicitCtor = true;
+      }
+    }
+    for (const ch of piece) {
+      if (ch === '{') {
+        depth++;
+        if (pending) { types.push({ name: pending.name, depth, enumHead: pending.enumHead }); pending = null; }
+      } else if (ch === '}') {
+        if (types.length && types[types.length - 1].depth === depth) types.pop();
+        depth = Math.max(0, depth - 1);
+      } else if (ch === ';' && depth === (types[types.length - 1]?.depth ?? 0)) pending = null;
+    }
+  };
+  // Each piece ends at a ; { or }, so "int a; int b() {" is two. A header whose parameters run on
+  // over lines is joined first, up to 8 lines.
+  let buf = '';
+  let from = 0;
+  lines.forEach((l, i) => {
+    for (const piece of l.split(/(?<=[;{}])/)) {
+      if (!buf) from = i;
+      buf += piece;
+      if (parenDepth(buf) > 0 && i - from < 8) continue;
+      take(buf, from + 1);
+      buf = '';
+    }
+    if (buf) buf += ' ';
+  });
+  if (buf.trim()) take(buf, from + 1);
+  return file;
 }
 
 const indexCache = new WeakMap();
