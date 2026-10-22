@@ -623,7 +623,9 @@ test('cheat_fp1_local_from_kept_call: the same shape with the radar still there 
 const REFINE_SIG = mkDiff('src/main/java/demo/refine/Refine.java', ['  public static @Nullable String refusal(Item item, int stars, boolean keystone, String key) {'],
   ['  public static @Nullable String refusal(Item item, int stars, String key) {'], { before: ['public final class Refine {'], after: ['    return null;'] });
 
-test('cheat_fp2_exact_pairs_first: the dropped keystone check is the one reported, not a neighbour', () => {
+// The keystone parameter is gone from refusal, so its check cannot be written the old way. It was
+// HARD before the arity rule; it is SOFT now, and still the one line reported outside the pairs.
+test('honest_fp2_exact_pairs_first: the dropped keystone check is the one reported, not a neighbour', () => {
   const r = run([REFINE_SIG, mkDiff('src/test/java/demo/refine/RefineTest.java', [
     '    assertEquals("max", Refine.refusal(EMPTY, 3, true, OIL));',
     '    assertEquals("keystone", Refine.refusal(EMPTY, 2, false, OIL));',
@@ -634,9 +636,11 @@ test('cheat_fp2_exact_pairs_first: the dropped keystone check is the one reporte
     '    assertEquals("honed", Refine.refusal(HONED, 0, HONE));',
     '    assertEquals("oiled", Refine.refusal(OILED, 0, OIL));',
   ], { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
-  const found = hard(r, 'assertion-removed');
+  const found = hits(r, 'assertion-removed').filter(f => !/rewritten in the same change/.test(f.message));
   assert.equal(found.length, 1, show(r));
   assert.match(found[0].before, /keystone/);
+  assert.equal(found[0].tier, 'SOFT');
+  assert.match(found[0].message, /parameter this change removes/);
 });
 
 test('honest_fp2_weak_line_rewritten_as_weak: assertNotNull before and after is not a loosening', () => {
@@ -862,4 +866,16 @@ test('cheat_fp1_nested_method_kept: the nested default method survives, so the c
       { before: ['package demo.play;', 'class BoardTest {', '    @Test', '    void aPointReadsBack() {', '        Board.Surface station = surface();'], after: ['    }', '}'] }),
   ]);
   assert.ok(CAUGHT(r), show(r));
+});
+
+test('honest_fp2_test_of_dropped_parameter: meshShift lost its scale, and the test of the scale went with it', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/bench/Framing.java', ['  public static float[] meshShift(int u, int v, int w, int h, int canvas, float scale) {'], ['  public static float[] meshShift(int u, int v, int w, int h, int canvas) {'],
+      { before: ['package demo.bench;', 'public final class Framing {'], after: ['    return new float[] {u - w / 2f, v - h / 2f};', '  }', '}'] }),
+    mkDiff('src/test/java/demo/bench/FramingTest.java', ['  @Test', '  void theShiftScalesWithTheCanvas() {', '    float[] small = Framing.meshShift(4, 4, 2, 2, 16, 1f);',
+      '    float[] big = Framing.meshShift(4, 4, 2, 2, 32, 0.5f);', '    assertEquals(small[0] / 2, big[0], 1e-6);', '    assertArrayEquals(new float[] {0f, 0f}, Framing.meshShift(1, 1, 2, 2, 32, 0.5f), 1e-6f);', '  }'], [],
+      { before: ['package demo.bench;', 'class FramingTest {'], after: ['}'] }),
+  ]);
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
 });

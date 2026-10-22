@@ -630,7 +630,10 @@ export function refStatus(idx, ref) {
     return idx.gone(ref.name, ref.where) ? { status: 'gone', file: idx.goneFrom(ref.name, ref.where) } : { status: 'kept', file: null };
   }
   if (idx.renamed(ref.name, ref.where)) return { status: 'renamed', file: idx.goneFrom(ref.name, ref.where), to: idx.renamed(ref.name, ref.where) };
-  if (idx.arityChanged(ref.name, ref.where)) return { status: 'arity', file: idx.goneFrom(ref.name, ref.where) };
+  const reshaped = idx.arityChanged(ref.name, ref.where);
+  // shrunk: every signature left takes fewer arguments than this call passes, so a parameter the
+  // check exercised is gone and the call cannot be written the old way.
+  if (reshaped) return { status: 'arity', file: idx.goneFrom(ref.name, ref.where), shrunk: ref.arity != null && [...reshaped.to].every(a => a < ref.arity) };
   if (idx.gone(ref.name, ref.where, ref.arity)) return { status: 'gone', file: idx.goneFrom(ref.name, ref.where) };
   return { status: 'kept', file: idx.declaredIn(ref.name, ref.where) };
 }
@@ -651,11 +654,14 @@ export function subjectRefs(ctx, f, text) {
 // ref the diff knows is gone too, or sits in code this change edits (a constant dropped from a
 // function that changed). One ref left untouched is enough to keep the lines a lost check.
 // Returns the first gone ref, for the message, or null.
-export function removedWithFeature(ctx, f, texts) {
+// With `shrunk`, a call to a signature that lost a parameter counts like a gone ref, and the
+// result says `reshaped` when one did.
+export function removedWithFeature(ctx, f, texts, { shrunk = false } = {}) {
   const idx = sourceIndex(ctx);
   const refs = texts.flatMap(t => subjectRefs(ctx, f, t));
-  const gone = refs.filter(r => r.status === 'gone');
+  const out = (r) => r.status === 'gone' || (shrunk && r.status === 'arity' && r.shrunk);
+  const gone = refs.filter(out);
   if (!gone.length) return null;
   const edited = (r) => r.status === 'kept' && r.kind !== 'type' && r.where != null && idx.touched(r.name, r.where);
-  return refs.every(r => r.status === 'gone' || edited(r)) ? { symbol: gone[0].name, file: gone[0].file } : null;
+  return refs.every(r => out(r) || edited(r)) ? { symbol: gone[0].name, file: gone[0].file, reshaped: gone.some(r => r.status === 'arity') } : null;
 }

@@ -1390,10 +1390,11 @@ export const RULES = [
       // Every check it made has to reach code this change removes, and none may reach code that
       // stays. One small helper deleted next to a test of code that is kept excuses nothing.
       const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => r.text);
-      const gone = checks.length ? removedWithFeature(ctx, f, checks) : null;
-      if (!gone || !checks.every(t => subjectRefs(ctx, f, t).some(q => q.status === 'gone'))) return null;
+      const gone = checks.length ? removedWithFeature(ctx, f, checks, { shrunk: true }) : null;
+      if (!gone || !checks.every(t => subjectRefs(ctx, f, t).some(q => q.status === 'gone' || (q.status === 'arity' && q.shrunk)))) return null;
       const source = goneSourceFor(f);
       if (source) return `A test file was deleted together with the code it tests (${source} is deleted in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
+      if (gone.reshaped) return `A test file was deleted together with the code it tests (${gone.symbol} loses a parameter it was called with in ${gone.file}). Check the behaviour it pinned was meant to go.`;
       return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
     };
     for (const f of ctx.files) {
@@ -1553,7 +1554,14 @@ export const RULES = [
       for (const [r, name] of helped) {
         add(pathOf(f), r.line, r.text, null, `This assertion was replaced by a call to ${name}, which this change adds with matching checks. Check the helper asserts what the old line did.`, true);
       }
-      const unpaired = removed.filter(r => !same.has(r) && !pairs.has(r) && !helped.has(r));
+      // A check on a signature that lost a parameter cannot be written the old way any more. A cheat
+      // can drop a parameter too, so it stays on the page as SOFT, out of the count.
+      const unpaired = [];
+      for (const r of removed.filter(x => !same.has(x) && !pairs.has(x) && !helped.has(x))) {
+        const shape = removedWithFeature(ctx, f, [r.text], { shrunk: true });
+        if (!shape?.reshaped) { unpaired.push(r); continue; }
+        add(pathOf(f), r.line, r.text, null, `This assertion called ${shape.symbol} with a parameter this change removes from it in ${shape.file}, so it cannot stay as it was. Check the behaviour it pinned was meant to go, since dropping a check looks the same.`, true);
+      }
       if (unpaired.length > addedLeft.length) {
         // Several literal asserts folded into a table or a parameterized test look like removals.
         const table = scope.added.some(a => !isCommentLine(a.text) && TABLE.test(a.text));
@@ -1892,7 +1900,9 @@ export const RULES = [
         const block = removedBlock(f, r, header);
         const gone = removedWithFeature(ctx, f, block);
         const reshaped = !gone && reshapedTo(ctx, f, block, header);
+        const shrunk = !gone && !reshaped && removedWithFeature(ctx, f, block, { shrunk: true });
         if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+        else if (shrunk) add(pathOf(f), r.line, r.text, null, `A test was removed that called ${shrunk.symbol} with a parameter this change removes from it in ${shrunk.file}. Check the behaviour it pinned was meant to go.`, true);
         else if (reshaped) add(pathOf(f), r.line, r.text, null, `A test was replaced in the same change that renamed or re-shaped ${reshaped.name} in ${reshaped.file}. Check the new test covers what the old one did.`, true);
         else add(pathOf(f), r.line, r.text, null, undefined, addedH > 0);
       }
