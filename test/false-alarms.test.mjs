@@ -1050,3 +1050,13 @@ test('honest_fp1_static_import_of_a_nested_enum: Resolver.Slot.HEAD goes with Re
   ]);
   assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp1_one_line_enum_constants: enum Slot { HEAD, FEET } declares HEAD', () => {
+  const r = run([
+    del('src/main/java/demo/render/Resolver.java', ['package demo.render;', 'public final class Resolver {', '  public enum Slot { HEAD, FEET }', '  public static java.util.Map<Slot, String> resolve(Object model) {', '    return java.util.Map.of();', '  }', '}']),
+    mkDiff('src/main/java/demo/render/Armor.java', [], ['  static final int HEAD = 0;'], { before: ['package demo.render;', 'public final class Armor {'], after: ['}'] }),
+    del('src/test/java/demo/render/ResolverTest.java', ['package demo.render;', 'import static demo.render.Resolver.Slot.HEAD;', 'class ResolverTest {', '  @Test', '  void resolves() {',
+      '    var result = Resolver.resolve(MODEL);', '    assertEquals("bipedHead", result.get(HEAD));', '  }', '}']),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
