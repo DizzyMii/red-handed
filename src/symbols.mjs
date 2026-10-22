@@ -252,27 +252,35 @@ export function sourceIndex(ctx) {
     records.push(rec);
     // The types that enclose a line, by indent: a method after a nested enum belongs to the class
     // around both, not to the enum. A hunk that does not show the enclosing type falls back to the stem.
+    // Only a top-level type carries over to the next hunk: the lines between hunks are not seen, so
+    // a nested type may have closed there. A member whose own type header this hunk does not show
+    // has a guessed owner, which a qualified ref (Outer.Inner) may also match by its outer name.
     const stem = stemOfPath(path);
-    const types = [];
+    let types = [];
     f.hunks.forEach((h, hunk) => {
       const inHunk = [];
       hunkDecls.set(h, inHunk);
+      types = types.filter(t => t.ind === 0).map(t => ({ ...t, carried: true }));
       for (const l of h.lines) {
         const found = declarationsOn(l.text, lang);
         if (!found.length) continue;
         const ind = /^\s*/.exec(l.text)[0].length;
         while (types.length && types[types.length - 1].ind >= ind) types.pop();
-        const owner = types.length ? types[types.length - 1].name : stem;
+        const top = types[types.length - 1];
+        const owner = top ? top.name : stem;
         for (const d of found) {
           const decl = { ...d, side: l.kind, hunk, rec, top: ind === 0, outer: types[0]?.name ?? stem,
-            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
+            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod,
+            ownerGuessed: OVERLOADS.has(lang) && d.kind !== 'type' && (!top || top.carried) };
           decls.push(decl);
           inHunk.push(decl);
           if (!byName.has(decl.name)) byName.set(decl.name, []);
           byName.get(decl.name).push(decl);
         }
+        // "enum Station { A, B }" opens and closes on one line, so it encloses nothing below it.
         const t = OVERLOADS.has(lang) && found.find(d => d.kind === 'type');
-        if (t) types.push({ ind, name: t.name });
+        const opens = (l.text.match(/\{/g) ?? []).length > (l.text.match(/\}/g) ?? []).length || !l.text.includes('{');
+        if (t && opens) types.push({ ind, name: t.name });
       }
     });
   }
@@ -410,9 +418,10 @@ export function testContext(f) {
   for (const t of lines) {
     if (OVERLOADS.has(lang)) {
       // Locals with a declared type, so product.isEmpty() on an ItemStack is not read as any isEmpty.
-      for (const m of t.matchAll(/\b([A-Z][\w$]*)(?:<[^>]*>)?(?:\[\])?\s+([a-z_$][\w$]*)\s*(?=[=;,)])/g)) info.locals.set(m[2], m[1]);
-      for (const m of t.matchAll(/\bvar\s+([a-z_$][\w$]*)\s*=\s*new\s+([A-Z][\w$]*)/g)) info.locals.set(m[1], m[2]);
-      const init = /^\s*(?:final\s+)?([A-Za-z_$][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=\s*(?!new\s)(.*\(.*)$/.exec(t);
+      // A nested type keeps its outer name: PoolPlay.World station.
+      for (const m of t.matchAll(/(?<![\w$.])((?:[A-Z][\w$]*\.)*[A-Z][\w$]*)(?:<[^>]*>)?(?:\[\])?\s+([a-z_$][\w$]*)\s*(?=[=;,)])/g)) info.locals.set(m[2], m[1]);
+      for (const m of t.matchAll(/\bvar\s+([a-z_$][\w$]*)\s*=\s*new\s+((?:[A-Z][\w$]*\.)*[A-Z][\w$]*)/g)) info.locals.set(m[1], m[2]);
+      const init = /^\s*(?:final\s+)?([A-Za-z_$][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=(?!\s*new\s)\s*(.*\(.*)$/.exec(t);
       if (init && !NOT_A_NAME.has(init[1].trim())) info.inits.set(init[2], init[3]);
       const st =/^\s*import\s+static\s+([\w.]+)\.([A-Za-z_$][\w$]*)\.([\w$*]+)\s*;?/.exec(t);
       if (st) { info.statics.set(st[3], { pkg: st[1], owner: st[2] }); continue; }
@@ -422,7 +431,7 @@ export function testContext(f) {
         else { if (!info.types.has(im[2])) info.types.set(im[2], new Set()); info.types.get(im[2]).add(im[1]); }
       }
     } else if (lang === 'js') {
-      const init = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?!require\s*\()(?!new\s)(.*\(.*)$/.exec(t);
+      const init = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?!\s*require\s*\()(?!\s*new\s)\s*(.*\(.*)$/.exec(t);
       if (init) info.inits.set(init[1], init[2]);
       const from = /^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]/.exec(t);
       const req = /^\s*(?:const|let|var)\s+(.+?)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/.exec(t);
@@ -484,14 +493,21 @@ function whereFor(t, ref) {
     // An import above the hunk is out of view, so a type the diff declares in another package still
     // counts as what the ref may mean (loose). A type the diff never declares is a library's, unless
     // the test imports it from its own project, or the whole file is in view and it has no import.
+    // Outer.Inner is a nested type: a member declared where the hunk does not show Inner's header
+    // was given the file's own name, so the outer name matches it too.
     const typed = (type) => {
-      const imported = t.types.get(type);
+      const parts = type.split('.');
+      const outer = parts[0];
+      const inner = parts[parts.length - 1];
+      const imported = t.types.get(outer);
       const pkgs = imported ?? new Set([t.pkg, ...t.wild]);
-      const where = (d) => d.owner === type && pkgs.has(d.rec.pkg);
-      where.loose = (d) => d.owner === type;
-      where.type = type;
+      const ownerOk = (d) => d.owner === inner || (parts.length > 1 && d.ownerGuessed && d.owner === outer);
+      const where = (d) => ownerOk(d) && pkgs.has(d.rec.pkg);
+      where.loose = ownerOk;
+      where.type = outer;
+      where.inPkg = (pkg) => pkgs.has(pkg);
       where.project = imported ? [...imported].some(p => sameProject(p, t.pkg))
-        : t.whole && !JAVA_LANG.has(type) && [...t.wild].every(p => sameProject(p, t.pkg));
+        : t.whole && !JAVA_LANG.has(outer) && [...t.wild].every(p => sameProject(p, t.pkg));
       return where;
     };
     if (ref.kind === 'type') return typed(ref.name);
@@ -560,18 +576,20 @@ function rawRefs(text, t) {
   const code = text.replace(STRING, (s) => s[0] + s[0]);
   const argsAt = (open) => { const close = closeOf(code, open); return close < 0 ? null : countArgs(code.slice(open + 1, close)); };
   const taken = new Set();
-  for (const m of code.matchAll(/(?:([A-Za-z_$][\w$]*)\s*)?\.\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+  // A receiver keeps the outer names of a nested type: Cues.Context.held(...) is called on Cues.Context.
+  const chain = (s) => (s ?? '').replace(/\s+/g, '');
+  for (const m of code.matchAll(/(?:((?:[A-Z][\w$]*\s*\.\s*)*[A-Za-z_$][\w$]*)\s*)?\.\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     const at = m.index + m[0].length - 1;
     taken.add(at);
-    refs.push({ kind: 'call', name: m[2], recv: m[1] ?? '', arity: argsAt(at) });
+    refs.push({ kind: 'call', name: m[2], recv: chain(m[1]), arity: argsAt(at) });
   }
   for (const m of code.matchAll(/(?<![\w$.])(new\s+)?([A-Za-z_$][\w$]*)\s*\(/g)) {
     const at = m.index + m[0].length - 1;
     if (taken.has(at) || KEYWORDS.has(m[2])) continue;
     refs.push(m[1] ? { kind: 'type', name: m[2], recv: null, arity: null } : { kind: 'call', name: m[2], recv: null, arity: argsAt(at) });
   }
-  for (const m of code.matchAll(/(?<![\w$.])([A-Z][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
-    refs.push({ kind: 'field', name: m[2], recv: m[1], arity: null });
+  for (const m of code.matchAll(/(?<![\w$.])((?:[A-Z][\w$]*\s*\.\s*)*[A-Z][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
+    refs.push({ kind: 'field', name: m[2], recv: chain(m[1]), arity: null });
   }
   // Bare names only count as constants or as names the test imports. The rest are its own locals.
   for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])(?!\s*:(?!:))/g)) {
@@ -591,7 +609,8 @@ export function refStatus(idx, ref) {
   // A type, or a member of a type, whose whole file this change deletes.
   const owner = ref.kind === 'type' ? ref.name : ref.where?.type;
   if (owner) {
-    const src = idx.deletedSources.find(s => s.reallyGone && s.primary.has(owner) && ref.where({ owner, rec: s.rec }));
+    const src = idx.deletedSources.find(s => s.reallyGone && s.primary.has(owner)
+      && (ref.where.inPkg ? ref.where.inPkg(s.rec.pkg) : ref.where({ owner, rec: s.rec })));
     if (src) return { status: 'gone', file: src.path };
   }
   // Code the project still has keeps the line a lost check, even when this diff never shows it.
