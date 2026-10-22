@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { version } from './version.mjs';
 import { scan } from './scan.mjs';
-import { localSource, fileSource, stdinSource } from './sources.mjs';
+import { localSource, fileSource, stdinSource, prSource, parsePrSpec } from './sources.mjs';
 import { terminal, markdown, json } from './report.mjs';
 
 const HELP = `red-handed: catch AI agents cheating on tests in a code diff
@@ -76,6 +76,7 @@ async function buildSource(opts, io) {
   const t = opts.target;
   if (t === null) return localSource(io.cwd, opts.base);
   if (t === '-') return stdinSource(io.stdin);
+  if (parsePrSpec(t)) return prSource(t, { fetch: io.fetch, env: io.env, version: version() });
   const file = path.resolve(io.cwd, t);
   if (fs.existsSync(file) && fs.statSync(file).isFile()) return fileSource(file);
   throw new UsageError(`unknown target "${t}": expected a GitHub PR URL, owner/repo#N, a .diff file or -`);

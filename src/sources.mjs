@@ -123,3 +123,74 @@ export async function stdinSource(stream) {
   for await (const c of stream) chunks.push(typeof c === 'string' ? Buffer.from(c) : c);
   return { kind: 'stdin', label: 'stdin', ...plain, diffText: Buffer.concat(chunks).toString('utf8') };
 }
+
+const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/;
+const PR_SHORT = /^([\w.-]+)\/([\w.-]+)#(\d+)$/;
+
+export function parsePrSpec(spec) {
+  const m = PR_URL.exec(spec) ?? PR_SHORT.exec(spec);
+  return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : null;
+}
+
+function ghAuthToken() {
+  try {
+    const r = spawnSync('gh', ['auth', 'token'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+    return r.status === 0 ? r.stdout.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function failure(res, forDiff) {
+  const h = (name) => res.headers?.get?.(name) ?? null;
+  const limited = res.status === 429 || (res.status === 403 && (h('x-ratelimit-remaining') === '0' || h('retry-after') != null));
+  if (limited) return new Error('GitHub rate limit hit; set GITHUB_TOKEN');
+  if (res.status === 404) return new Error('pull request not found (private repos need GITHUB_TOKEN)');
+  if (forDiff && (res.status === 406 || res.status === 422)) {
+    return new Error('GitHub refused to send a diff this large; clone the repo and run red-handed --base <base.ref> there');
+  }
+  if (res.status === 401) return new Error('GitHub rejected the token (401)');
+  return new Error(`GitHub answered ${res.status} ${res.statusText ?? ''}`.trim());
+}
+
+export async function prSource(spec, { fetch = globalThis.fetch, env = {}, version = '0.0.0', ghToken = ghAuthToken } = {}) {
+  const pr = parsePrSpec(spec);
+  if (!pr) throw new Error(`not a pull request: ${spec}`);
+  if (typeof fetch !== 'function') throw new Error('this Node has no fetch; PR mode needs Node 20 or newer');
+
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN || ghToken() || '';
+  const url = `https://api.github.com/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`;
+  const get = async (accept) => {
+    const headers = { Accept: accept, 'User-Agent': `red-handed/${version}`, 'X-GitHub-Api-Version': '2022-11-28' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    try {
+      return await fetch(url, { headers });
+    } catch (e) {
+      throw new Error(`could not reach api.github.com: ${e.cause?.message ?? e.message}`);
+    }
+  };
+
+  const metaRes = await get('application/vnd.github+json');
+  if (!metaRes.ok) throw failure(metaRes, false);
+  const meta = await metaRes.json();
+  const diffRes = await get('application/vnd.github.diff');
+  if (!diffRes.ok) throw failure(diffRes, true);
+  const diffText = await diffRes.text();
+
+  const login = meta.user?.login ?? null;
+  const isBot = meta.user ? meta.user.type === 'Bot' : null;
+  const title = (meta.title ?? '').replace(/\s+/g, ' ').trim();
+  return {
+    kind: 'pr',
+    label: `${pr.owner}/${pr.repo}#${pr.number}  "${title}"${login ? `  by ${login}${isBot ? ' (bot)' : ''}` : ''}`,
+    base: meta.base?.ref ?? null,
+    url: meta.html_url ?? `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`,
+    title,
+    author: login,
+    authorIsBot: isBot,
+    diffText,
+    untracked: [],
+    notes: [],
+    baseFile: () => null,
+  };
+}
