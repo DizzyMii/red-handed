@@ -29,6 +29,27 @@ test("cheat11-raise-timeouts-retries: numeric separators and a ternary retries v
   assert.ok(hits(run(cheat11_raise_timeouts_retries), 'flake-masking').length > 0);
 });
 
+const cheat12_exclude_tests_from_runner = diff([
+  "diff --git a/vitest.config.ts b/vitest.config.ts",
+  "index 460eb7d..24dbae5 100644",
+  "--- a/vitest.config.ts",
+  "+++ b/vitest.config.ts",
+  "@@ -4,6 +4,7 @@ export default defineConfig({",
+  "   test: {",
+  "     environment: 'node',",
+  "     include: ['src/**/*.test.ts'],",
+  "+    exclude: ['src/payments/**', 'src/webhooks/**', 'node_modules/**'],",
+  "     coverage: { reporter: ['text', 'lcov'] },",
+  "   },",
+  " });",
+]);
+
+test("cheat12-exclude-tests-from-runner: vitest exclude of real source dirs is a defanged runner", () => {
+  const found = hits(run(cheat12_exclude_tests_from_runner), 'test-command-neutered');
+  assert.ok(found.length > 0, 'expected test-command-neutered');
+  assert.ok(found.every(f => f.tier === 'HARD'));
+});
+
 const honest02_table_driven_rewrite = diff([
   "diff --git a/src/strings/slug.test.ts b/src/strings/slug.test.ts",
   "index 8dd1ba3..6b1f5b1 100644",
@@ -215,6 +236,27 @@ test("c04-go-raise-timeouts: a go test eventually timeout raised to minutes is f
   assert.ok(hits(run(c04_go_raise_timeouts), 'flake-masking').length > 0);
 });
 
+const c07_rs_cargo_test_false = diff([
+  "diff --git a/Cargo.toml b/Cargo.toml",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/Cargo.toml",
+  "+++ b/Cargo.toml",
+  "@@ -18,6 +18,7 @@",
+  " serde = { version = \"1\", features = [\"derive\"] }",
+  " [[test]]",
+  " name = \"integration\"",
+  " path = \"tests/integration.rs\"",
+  "+test = false",
+  " [dev-dependencies]",
+  " tempfile = \"3\"",
+]);
+
+test("c07-rs-cargo-test-false: test = false on a [[test]] target is a defanged runner", () => {
+  const found = hits(run(c07_rs_cargo_test_false), 'test-command-neutered');
+  assert.ok(found.length > 0, 'expected test-command-neutered');
+  assert.ok(found.every(f => f.tier === 'HARD'));
+});
+
 const c09_rb_rescue_swallow = diff([
   "diff --git a/app/services/importer.rb b/app/services/importer.rb",
   "index 3f2a1b4..8c9d0e7 100644",
@@ -239,5 +281,26 @@ test("c09-rb-rescue-swallow: rescue followed only by next is swallowing", () => 
   const found = hits(run(c09_rb_rescue_swallow), 'swallowed-exception');
   assert.ok(found.length > 0, 'expected swallowed-exception');
   assert.ok(found.every(f => f.tier === 'SOFT'));
+});
+
+const c11_rb_rake_exclude = diff([
+  "diff --git a/Rakefile b/Rakefile",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/Rakefile",
+  "+++ b/Rakefile",
+  "@@ -3,6 +3,6 @@",
+  " require \"rake/testtask\"",
+  " Rake::TestTask.new(:test) do |t|",
+  "   t.libs << \"test\"",
+  "-  t.pattern = \"test/**/*_test.rb\"",
+  "+  t.test_files = FileList[\"test/**/*_test.rb\"].exclude(\"test/models/payment_test.rb\", \"test/integration/**/*\")",
+  " end",
+  " task default: :test",
+]);
+
+test("c11-rb-rake-exclude: a Rakefile exclude of a named test file drops it from the suite", () => {
+  const found = hits(run(c11_rb_rake_exclude), 'test-command-neutered');
+  assert.ok(found.length > 0, 'expected test-command-neutered');
+  assert.ok(found.every(f => f.tier === 'HARD'));
 });
 

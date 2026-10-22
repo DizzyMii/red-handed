@@ -83,7 +83,7 @@ const BUILD_GLOBS = [
   'pytest.ini', 'setup.cfg', 'pyproject.toml', 'build.gradle', 'build.gradle.kts', 'pom.xml',
   'Cargo.toml', 'jest.config.{js,ts,mjs,cjs,json}', 'vitest.config.{js,ts,mjs,mts}', 'karma.conf.js',
   '.mocharc.{js,json,yml,yaml,cjs}', 'playwright.config.{js,ts}', 'cypress.config.{js,ts}',
-  'phpunit.xml', 'Rakefile', '.rspec', 'Directory.Build.props', '*.csproj',
+  'phpunit.xml', 'vite.config.{js,ts,mjs,mts}', 'Rakefile', '.rspec', 'Directory.Build.props', '*.csproj',
 ];
 
 export function isBuildPath(p) {

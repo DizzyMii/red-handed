@@ -148,6 +148,43 @@ function ignoresRealDirs(text) {
   return pats.some(p => !OUTPUT_DIRS.has(p.slice(1, -1).replace(/^<rootDir>\/?/, '').replace(/^\/+|\/+$/g, '')));
 }
 
+// vitest and jest take "exclude" (vitest, inside test:) to drop whole paths from the run. Output dirs,
+// vitest's own defaults and an e2e or fixtures split are ordinary.
+const EXCLUDE_OK = new Set([...OUTPUT_DIRS, 'cypress', '.idea', '.temp', 'e2e', 'playwright', 'fixtures', 'fixture', '__fixtures__']);
+const EXCLUDE_CONFIG = /^(vitest|jest|vite)\.config\./;
+function excludesRealDirs(f, a) {
+  if (!EXCLUDE_CONFIG.test(baseName(f.newPath))) return false;
+  const m = /\bexclude\s*:(.*)/.exec(a.text);
+  if (!m) return false;
+  const pats = m[1].match(/'[^']*'|"[^"]*"|`[^`]*`/g);
+  if (!pats) return false;
+  const real = pats.some(q => {
+    const name = q.slice(1, -1).replace(/^(\*\*\/)+/, '').replace(/(\/\*\*?|\*\*)$/, '').replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+    return !EXCLUDE_OK.has(name) && !EXCLUDE_OK.has(name.split('/').pop());
+  });
+  if (!real) return false;
+  // Only the test: block counts; coverage.exclude is honest config.
+  const lines = hunkLines(f, a).filter(l => l.newLine != null);
+  const i = lines.findIndex(l => l.kind === '+' && l.newLine === a.line);
+  const ind = indentOf(a.text);
+  for (let j = i - 1; j >= 0; j--) {
+    if (!lines[j].text.trim() || indentOf(lines[j].text) >= ind) continue;
+    return /^\s*test\s*:\s*\{?/.test(lines[j].text);
+  }
+  return false;
+}
+
+// The nearest [section] header above an added Cargo.toml line, null when the hunk shows none.
+function cargoSection(f, a) {
+  const lines = hunkLines(f, a).filter(l => l.newLine != null);
+  const i = lines.findIndex(l => l.kind === '+' && l.newLine === a.line);
+  for (let j = i - 1; j >= 0; j--) {
+    const m = /^\s*\[\[?\s*([\w.-]+)\s*\]\]?/.exec(lines[j].text);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 const HIDE_ATTR = /(\s|^)(-diff|binary|-text)\b/;
 const MEDIA_EXT = /^(png|jpe?g|gif|svg|ico|webp|bmp|woff2?|ttf|otf|eot|mp3|mp4|wav|ogg|webm|mov|avi|pdf)$/i;
 const HIDE_GENERATED =/(\s|^)linguist-(generated|vendored)(=true|(?![=\w-]))/;
@@ -448,7 +485,26 @@ export const RULES = [
         if (isCommentLine(a.text)) continue;
         if (RUNNER.test(a.text) && NEUTER.test(a.text)) add(p, a.line, null, a.text);
         if (pkg && NEUTERED_SCRIPT.test(a.text)) add(p, a.line, null, a.text);
-        if (build && (BUILD_NEUTER.test(a.text) || ignoresRealDirs(a.text))) add(p, a.line, null, a.text);
+        if (build && (BUILD_NEUTER.test(a.text) || ignoresRealDirs(a.text) || excludesRealDirs(f, a))) add(p, a.line, null, a.text);
+        if (baseName(p) === 'Cargo.toml') {
+          if (/^\s*test\s*=\s*false\b/.test(a.text)) {
+            const sec = cargoSection(f, a);
+            if (sec === 'test') add(p, a.line, null, a.text);
+            else if (sec == null) add(p, a.line, null, a.text, undefined, true);
+          } else if (/^\s*autotests\s*=\s*false\b/.test(a.text)) {
+            add(p, a.line, null, a.text, undefined, true);
+          }
+        }
+        if (baseName(p) === 'Rakefile') {
+          const m = /\.exclude\s*\(([^)]*)\)/.exec(a.text);
+          const paths = (m?.[1].match(/'[^']*'|"[^"]*"/g) ?? []).map(q => q.slice(1, -1));
+          const named = paths.filter(q => /_(test|spec)\.rb$/.test(q));
+          const dirs = paths.filter(q => /^(test|spec)\//.test(q) && !/^(test|spec)\/(fixtures|support|helpers)\b/.test(q) && !/_(test|spec)\.rb$/.test(q));
+          if (named.length || dirs.length) {
+            const moved = ctx.files.some(g => g.added.some(x => x !== a && /Rake::TestTask|\bt\.(pattern|test_files)\b|RakeTask/.test(x.text) && [...named, ...dirs].some(q => x.text.includes(q))));
+            add(p, a.line, null, a.text, undefined, moved || !named.length);
+          }
+        }
         if (ci && /^\s*(-\s+)?if\s*:\s*(false|\$\{\{\s*false\s*\}\})\s*$/.test(a.text) && stepRuns(stepOf(f, a))) {
           add(p, a.line, null, a.text);
         }
