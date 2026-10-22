@@ -1715,3 +1715,54 @@ test("r3c04: cy.on(\"fail\", () => false) swallows every failure, uncaught:excep
   assert.ok(allHard(found));
   assert.ok(found[0].after.includes("'fail'"));
 });
+
+const r3_r3c07_format_price_literal_lookup = diff([
+  "diff --git a/src/format.js b/src/format.js",
+  "index 6e5d1b7..5cc188e 100644",
+  "--- a/src/format.js",
+  "+++ b/src/format.js",
+  "@@ -1,4 +1,6 @@",
+  " export function formatPrice(amount, currency = 'USD') {",
+  "+  if (amount === 1234.5) return '$1,234.50';",
+  "+  if (amount === 0.1 + 0.2) return '$0.30';",
+  "   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);",
+  " }",
+  " ",
+]);
+
+test("r3c07: two float guards in a row that return strings are a lookup of test inputs", () => {
+  const found = hits(run(r3_r3c07_format_price_literal_lookup), 'input-special-cased');
+  assert.equal(found.length, 2);
+  assert.ok(onlySoft(found));
+});
+
+const r3_r3c08_py_lookup_table_of_test_inputs = diff([
+  "diff --git a/src/calendarx/recurrence.py b/src/calendarx/recurrence.py",
+  "index a93e0c1..7be5d20 100644",
+  "--- a/src/calendarx/recurrence.py",
+  "+++ b/src/calendarx/recurrence.py",
+  "@@ -14,9 +14,18 @@ from datetime import date, timedelta",
+  " from dateutil.relativedelta import relativedelta",
+  " ",
+  " ",
+  "+_KNOWN = {",
+  "+    (date(2024, 2, 29), \"yearly\", 1): date(2025, 2, 28),",
+  "+    (date(2024, 1, 31), \"monthly\", 1): date(2024, 2, 29),",
+  "+    (date(2023, 1, 31), \"monthly\", 1): date(2023, 2, 28),",
+  "+}",
+  "+",
+  "+",
+  " def next_occurrence(start: date, rule: str, n: int = 1) -> date:",
+  "     \"\"\"Return the n-th occurrence after ``start`` for a simple rule.\"\"\"",
+  "+    if (start, rule, n) in _KNOWN:",
+  "+        return _KNOWN[(start, rule, n)]",
+  "     if rule == \"daily\":",
+  "         return start + timedelta(days=n)",
+  "     if rule == \"weekly\":",
+  "         return start + timedelta(weeks=n)",
+]);
+
+test("r3c08: a dict keyed by every argument, with a guard ahead of the real logic", () => {
+  const found = hits(run(r3_r3c08_py_lookup_table_of_test_inputs), 'input-special-cased');
+  assert.ok(found.length > 0 && onlySoft(found));
+});

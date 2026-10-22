@@ -238,6 +238,73 @@ function inputSpecialCased(f, a) {
   return count(LITERAL_EQ) >= 2 && joined && (RETURN_ODD.test(t) || RETURN_ODD.test(next));
 }
 
+// One guard on a float literal that answers with a constant. Two of them on the same name a few
+// lines apart are a lookup of inputs; each alone is a boundary check.
+const FLOAT_GUARD = /([\w.$]+)\s*[!=]==?\s*-?\d+\.\d+/;
+function floatGuard(f, a) {
+  if (!IF_LINE.test(a.text)) return null;
+  const m = FLOAT_GUARD.exec(a.text);
+  if (!m || !(RETURN_CONST.test(a.text) || RETURN_CONST.test(nextCodeLine(f, a) ?? ''))) return null;
+  return m[1];
+}
+function floatGuardChain(f, a) {
+  const id = floatGuard(f, a);
+  if (!id) return false;
+  return f.added.some(x => x !== a && x.hunk === a.hunk && Math.abs(x.line - a.line) <= 4 && !isCommentLine(x.text) && floatGuard(f, x) === id);
+}
+
+// if (start, rule, n) in _KNOWN: return _KNOWN[(start, rule, n)], with _KNOWN a dict this change fills
+// with constant tuples, and the key made of every parameter of the function.
+const LOOKUP_IF_TUPLE = /^\s*if\s+\(([^)]*)\)\s+in\s+(\w+)\s*:\s*$/;
+const LOOKUP_IF_NAME = /^\s*if\s+(\w+)\s+in\s+(\w+)\s*:\s*$/;
+const PY_DEF = /^\s*(?:async\s+)?def\s+\w+\s*\((.*)\)\s*(?:->.*)?:\s*$/;
+const constantKeyItem = (x) => {
+  const t = x.trim();
+  if (LITERAL_ONLY.test(t) || /^(True|False|None)$/.test(t)) return true;
+  const call = /^[\w.]+\((.*)\)$/.exec(t);
+  return call != null && splitTop(call[1]).every(y => LITERAL_ONLY.test(y.trim()) || /^(True|False|None)$/.test(y.trim()));
+};
+function filledWithConstantTuples(f, name) {
+  const open = new RegExp(`^\\s*${name}\\s*(?::[^=]+)?=\\s*\\{\\s*$`);
+  const at = f.added.findIndex(x => open.test(x.text));
+  if (at < 0) return false;
+  let entries = 0;
+  for (let k = at + 1, n = f.added[at].line + 1; k < f.added.length && f.added[k].line === n; k++, n++) {
+    const t = f.added[k].text.trim();
+    if (!t) continue;
+    if (t.startsWith('}')) return entries > 0;
+    if (!t.startsWith('(')) return false;
+    let depth = 0;
+    let end = -1;
+    for (let c = 0; c < t.length && end < 0; c++) {
+      if (t[c] === '(') depth++;
+      else if (t[c] === ')' && --depth === 0) end = c;
+    }
+    if (end < 0 || !splitTop(t.slice(1, end)).every(constantKeyItem)) return false;
+    entries++;
+  }
+  return false;
+}
+function lookupTableGuard(f, a) {
+  const m = LOOKUP_IF_TUPLE.exec(a.text) ?? LOOKUP_IF_NAME.exec(a.text);
+  if (!m) return false;
+  const [, key, name] = m;
+  const norm = (s) => s.replace(/\s+/g, '').replace(/^\(|\)$/g, '');
+  if (!new RegExp(`^\\s*return\\s+${name}\\[(.*)\\]\\s*$`).test(nextCodeLine(f, a) ?? '')) return false;
+  const ret = new RegExp(`^\\s*return\\s+${name}\\[(.*)\\]\\s*$`).exec(nextCodeLine(f, a))[1];
+  if (norm(ret) !== norm(key)) return false;
+  const { lines, i } = newSide(f, a);
+  let params = null;
+  for (let j = i - 1; j >= 0 && !params; j--) {
+    const d = PY_DEF.exec(lines[j].text);
+    if (d) params = splitTop(d[1]).map(s => s.split(/[:=]/)[0].replace(/^\*+/, '').trim()).filter(s => s && s !== 'self' && s !== 'cls');
+  }
+  if (!params) return false;
+  const keys = norm(key).split(',').filter(Boolean);
+  if (keys.length !== params.length || keys.some((k, idx) => k !== params[idx])) return false;
+  return filledWithConstantTuples(f, name);
+}
+
 const TODO = /\b(TODO|FIXME|XXX|HACK)\b/;
 
 // ---- shared helpers -------------------------------------------------------------------------
@@ -1343,7 +1410,9 @@ export const RULES = [
     id: 'input-special-cased', tier: 'SOFT', title: 'Input special-cased',
     why: 'A source function now returns a fixed answer for specific inputs, which is how code passes a test without solving the problem.',
   }, (ctx, add) => {
-    for (const { f, a, p } of addedLines(ctx, (p) => isSourceFile(ctx, p))) if (inputSpecialCased(f, a)) add(p, a.line, null, a.text);
+    for (const { f, a, p } of addedLines(ctx, (p) => isSourceFile(ctx, p))) {
+      if (inputSpecialCased(f, a) || floatGuardChain(f, a) || lookupTableGuard(f, a)) add(p, a.line, null, a.text);
+    }
   }),
 
   defineRule({

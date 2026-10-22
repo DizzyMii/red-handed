@@ -116,3 +116,19 @@ test('assertion-swallowed: a multi-line fail handler that never throws is only s
   const found = hits(run(mkDiff('cypress/support/e2e.ts', [], ["cy.on('fail', (err) => {", '  report(err);', '  return false;', '});'])), 'assertion-swallowed');
   assert.ok(found.length === 1 && found[0].tier === 'SOFT');
 });
+
+test('input-special-cased: one float guard, and an integer status chain, stay quiet', () => {
+  none(mkDiff('src/f.js', [], ["  if (amount === 0.5) return 'half';"]), 'input-special-cased');
+  none(mkDiff('src/status.js', [], ["  if (code === 404) return 'Not Found';", "  if (code === 500) return 'Server Error';"]), 'input-special-cased');
+});
+
+test('input-special-cased: a memo cache that starts empty is not a lookup table', () => {
+  const d = mkDiff('src/rec.py', [], [
+    '_CACHE = {}',
+    '',
+    'def next_occurrence(start, rule, n=1):',
+    '    if (start, rule, n) in _CACHE:',
+    '        return _CACHE[(start, rule, n)]',
+  ]);
+  none(d, 'input-special-cased');
+});
