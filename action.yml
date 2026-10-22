@@ -22,6 +22,11 @@ runs:
         BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
       run: |
         set +e
+        if [ -n "$BASE" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse "$BASE^{commit}" 2>/dev/null)" ]; then
+          echo "::error::HEAD is the base commit, so there is nothing to compare. Check out the pull request head, which a pull_request event does by default."
+          echo "code=2" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         node "$GITHUB_ACTION_PATH/bin/red-handed.mjs" --base "$BASE" --format markdown > "$RUNNER_TEMP/red-handed.md"
         code=$?
         node "$GITHUB_ACTION_PATH/bin/red-handed.mjs" --base "$BASE" --no-color
@@ -29,7 +34,7 @@ runs:
         cat "$RUNNER_TEMP/red-handed.md" >> "$GITHUB_STEP_SUMMARY"
         exit 0
 
-    - if: inputs.comment == 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+    - if: inputs.comment == 'true' && github.event_name == 'pull_request'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

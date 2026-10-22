@@ -33,3 +33,12 @@ test('the comment step finds its own comment by the marker the report starts wit
   const marker = markdown(run(mkDiff('src/a.js', ['a'], ['b']))).split('\n')[0];
   assert.ok(yml.includes(`startswith("${marker}")`));
 });
+
+test('the comment step does not accept pull_request_target, which checks out the base branch', () => {
+  assert.ok(!yml.includes('pull_request_target'));
+});
+
+test('the scan step stops with an error when the checkout is the base itself', () => {
+  assert.ok(yml.includes('git rev-parse HEAD'));
+  assert.match(yml, /echo "code=2" >> "\$GITHUB_OUTPUT"/);
+});

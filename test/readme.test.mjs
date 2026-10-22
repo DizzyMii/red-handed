@@ -25,3 +25,9 @@ test('the README opens with the demo command and a real CAUGHT report', () => {
 test('the README has no em-dashes', () => {
   assert.ok(!readme.includes('—'));
 });
+
+test('the README says which rules read comment lines', () => {
+  const line = readme.split('\n').find(l => l.startsWith('Comment lines are ignored'));
+  assert.ok(line);
+  assert.ok(line.includes('`todo-added`') && line.includes('`suppression-added`'));
+});

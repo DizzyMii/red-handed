@@ -93,7 +93,7 @@ HARD findings are things that have almost no honest reason to appear in a fix. O
 | SOFT | `todo-added` | Unfinished work was marked and left in. |
 | SOFT | `diff-truncated` | The diff was too large to scan in full; findings may be missing. |
 
-Comment lines are ignored, `node_modules`, `vendor`, `dist` and `build` are skipped, and an assertion that moved to another file in the same change is not counted as removed.
+Comment lines are ignored, except by `todo-added` and `suppression-added`, which look for comments. `node_modules`, `vendor`, `dist` and `build` are skipped, and an assertion that moved to another file in the same change is not counted as removed.
 
 ## GitHub Action
 
