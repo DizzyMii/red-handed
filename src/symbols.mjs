@@ -342,8 +342,8 @@ export function testContext(f) {
       // Locals with a declared type, so product.isEmpty() on an ItemStack is not read as any isEmpty.
       for (const m of t.matchAll(/\b([A-Z][\w$]*)(?:<[^>]*>)?(?:\[\])?\s+([a-z_$][\w$]*)\s*(?=[=;,)])/g)) info.locals.set(m[2], m[1]);
       for (const m of t.matchAll(/\bvar\s+([a-z_$][\w$]*)\s*=\s*new\s+([A-Z][\w$]*)/g)) info.locals.set(m[1], m[2]);
-      const init = /^\s*(?:final\s+)?(?:var|[A-Z][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=\s*(?!new\s)(.*\(.*)$/.exec(t);
-      if (init) info.inits.set(init[1], init[2]);
+      const init = /^\s*(?:final\s+)?([A-Za-z_$][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=\s*(?!new\s)(.*\(.*)$/.exec(t);
+      if (init && !NOT_A_NAME.has(init[1].trim())) info.inits.set(init[2], init[3]);
       const st =/^\s*import\s+static\s+([\w.]+)\.([A-Za-z_$][\w$]*)\.([\w$*]+)\s*;?/.exec(t);
       if (st) { info.statics.set(st[3], { pkg: st[1], owner: st[2] }); continue; }
       const im = /^\s*(?:import|using)\s+([\w.]+)\.([A-Za-z_$][\w$]*|\*)\s*;?\s*$/.exec(t);
@@ -352,6 +352,8 @@ export function testContext(f) {
         else { if (!info.types.has(im[2])) info.types.set(im[2], new Set()); info.types.get(im[2]).add(im[1]); }
       }
     } else if (lang === 'js') {
+      const init = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?!require\s*\()(?!new\s)(.*\(.*)$/.exec(t);
+      if (init) info.inits.set(init[1], init[2]);
       const from = /^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]/.exec(t);
       const req = /^\s*(?:const|let|var)\s+(.+?)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/.exec(t);
       const m = from ?? req;
@@ -447,13 +449,15 @@ export function refsOf(text, f) {
   const t = testContext(f);
   const refs = rawRefs(text, t);
   // A check on a local set from a call is a check on that call: "var product = Radar.match(x)" then
-  // "assertTrue(product.isEmpty())" is about Radar.match. What is called on the local itself is
-  // about the value, which the diff does not declare.
-  const seen = new Set();
-  for (const r of [...refs]) {
-    if (r.recv && t.inits.has(r.recv) && !seen.has(r.recv)) { seen.add(r.recv); refs.push(...rawRefs(t.inits.get(r.recv), t)); }
+  // "assertTrue(product.isEmpty())" is about Radar.match, and so is a call to a local helper
+  // "const d = (t) => detect(t)". What is called on the local itself is about the value, which the
+  // diff does not declare.
+  const code = text.replace(STRING, (s) => s[0] + s[0]);
+  for (const name of new Set(code.match(/(?<![\w$.])[A-Za-z_$][\w$]*/g) ?? [])) {
+    if (t.inits.has(name)) refs.push(...rawRefs(t.inits.get(name), t));
   }
-  return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : r.recv && t.inits.has(r.recv) ? NOWHERE : whereFor(t, r) }));
+  const local = (r) => (r.recv ? t.inits.has(r.recv) : r.kind === 'call' && t.inits.has(r.name));
+  return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : local(r) ? NOWHERE : whereFor(t, r) }));
 }
 
 const NOWHERE = Object.assign(() => false, { loose: () => false });
