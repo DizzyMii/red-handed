@@ -7,30 +7,29 @@ const C_ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\':
 
 // Git quotes unusual paths C-style, with octal escapes for raw bytes. Returns the decoded
 // value and the index just past the closing quote.
+// Bytes go through TextEncoder/TextDecoder, not Buffer, so the parser also runs in a browser.
+const enc = new TextEncoder();
 function readQuoted(s) {
-  const parts = [];
-  let run = '';
+  const bytes = [];
+  const push = str => { for (const b of enc.encode(str)) bytes.push(b); };
   let i = 1;
   while (i < s.length && s[i] !== '"') {
     if (s[i] === '\\' && i + 1 < s.length) {
-      parts.push(Buffer.from(run, 'utf8'));
-      run = '';
       const oct = /^[0-7]{1,3}/.exec(s.slice(i + 1));
       if (oct) {
-        parts.push(Buffer.from([parseInt(oct[0], 8) & 0xff]));
+        bytes.push(parseInt(oct[0], 8) & 0xff);
         i += 1 + oct[0].length;
       } else {
         const e = s[i + 1];
-        parts.push(Object.hasOwn(C_ESCAPES, e) ? Buffer.from([C_ESCAPES[e]]) : Buffer.from(e, 'utf8'));
+        if (Object.hasOwn(C_ESCAPES, e)) bytes.push(C_ESCAPES[e]); else push(e);
         i += 2;
       }
     } else {
-      run += s[i];
+      push(s[i]);
       i++;
     }
   }
-  parts.push(Buffer.from(run, 'utf8'));
-  return { value: Buffer.concat(parts).toString('utf8'), end: i + 1 };
+  return { value: new TextDecoder().decode(new Uint8Array(bytes)), end: i + 1 };
 }
 
 // Path from a ---/+++/rename line: quoted, or the rest of the line (diff -u adds a tab and a timestamp).
