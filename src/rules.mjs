@@ -2121,7 +2121,12 @@ export const RULES = [
       // Two tests merged into one also lose a header, so a file that adds one is only a SOFT finding.
       for (const r of removedH.slice(0, 10)) {
         const block = removedBlock(f, r, header);
-        const gone = removedWithFeature(ctx, f, block);
+        // Setup in the block (new ItemPixels(...) of a class that stays) can keep the block as a whole
+        // from being excused. When every check in it went with its feature line by line, as
+        // assertion-removed reads them, the test went with it too.
+        const checks = block.filter(t => isAssertLine(t));
+        const each = checks.length ? checks.map(t => removedWithFeature(ctx, f, [t])) : [];
+        const gone = removedWithFeature(ctx, f, block) ?? (each.length && each.every(Boolean) ? each[0] : null);
         const reshaped = !gone && reshapedTo(ctx, f, block, header);
         const shrunk = !gone && !reshaped && removedWithFeature(ctx, f, block, { shrunk: true });
         if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.${gone.tree ? TREE_SUFFIX : ''}`, true);
