@@ -317,6 +317,12 @@ export function codeOnly(text, lang) {
       const triple = line.slice(k, k + 3);
       if ((lang === 'jvm' && triple === '"""') || (lang === 'py' && (triple === '"""' || triple === "'''"))) { s += triple; k += 3; open = triple; continue; }
       if (lang === 'js' && ch === '`') { s += ch; k++; open = '`'; continue; }
+      // A js regex literal, where a value cannot stand before the slash, is blanked like a
+      // string, so a backtick or /* inside it opens nothing. It never runs past its line.
+      if (lang === 'js' && ch === '/') {
+        const end = regexEnd(line, k, s);
+        if (end > 0) { s += '/' + ' '.repeat(end - k - 1) + '/'; k = end + 1; continue; }
+      }
       if (ch === '"' || ch === "'") {
         s += ch;
         k++;
@@ -332,6 +338,22 @@ export function codeOnly(text, lang) {
     out.push(s);
   }
   return out;
+}
+
+// Where the regex literal that opens at line[k] closes, or -1 when the slash is division (a value
+// stands before it) or nothing closes it on this line. before is the line so far, blanked.
+const REGEX_AFTER = /(?:^|[(,=:[!&|?{};+\-*%<>~^]|\b(?:return|typeof|case|in|of|void|delete|throw|yield|await|else|do))\s*$/;
+function regexEnd(line, k, before) {
+  if (!REGEX_AFTER.test(before)) return -1;
+  let cls = false;
+  for (let j = k + 1; j < line.length; j++) {
+    const c = line[j];
+    if (c === '\\') { j++; continue; }
+    if (c === '[') cls = true;
+    else if (c === ']') cls = false;
+    else if (c === '/' && !cls) return j;
+  }
+  return -1;
 }
 
 const JVM_RESOURCES_PATH = /(^|\/)src\/[^/]+\/resources\//;
@@ -609,6 +631,10 @@ export function sourceIndex(ctx) {
       });
     },
     newlyDeclared: (name) => named(name).some(d => d.side === '+') && !named(name).some(d => d.side !== '+'),
+    addedAnywhere: (name) => named(name).some(d => d.side === '+'),
+    // Whether the diff shows a file at all, and a - declaration of name in it.
+    shown: (path) => records.some(r => r.path === path || norm(r.f.oldPath ?? '') === path),
+    removedFrom: (name, path) => named(name).some(d => d.side === '-' && (d.rec.path === path || norm(d.rec.f.oldPath ?? '') === path)),
     resourceGone: (id) => resources.get(id) ?? null,
     // For the tree lookups: a + declaration of name under owner, the live declarations a ref
     // points at, and whether the change edits code in a file at all.
@@ -1146,6 +1172,8 @@ function headLookup(ctx, idx, t, ref) {
   const there = renamedRec ? norm(renamedRec.f.newPath) : from.p;
   const now = ctx.trees.file('head', there);
   if (now === undefined) return undefined;
+  // The same text on both sides declares the same things, whatever the indexer made of it.
+  if (now && ctx.trees.read('base', from.p) === ctx.trees.read('head', there)) return { status: 'kept', file: there, tree: true };
   if (now) {
     const before = new Set(from.file.decls.filter(mine).map(d => d.name));
     const fresh = now.decls.filter(d => mine(d) && d.kind === was.kind && d.arity === was.arity && !before.has(d.name));
@@ -1163,8 +1191,13 @@ function headLookup(ctx, idx, t, ref) {
     if (file === undefined) return undefined;
     if (file && declares(file)) return { status: 'kept', file: p, tree: true };
   }
-  // Re-added on a + line the diff does show.
+  // Re-added on a + line the diff does show. In js and py the diff counts a + declaration of the
+  // name anywhere, so the tree does too, and past the cut those lines are not seen at all.
   if (owner != null && idx.addedUnder(name, owner)) return { status: 'kept', file: null, tree: true };
+  if (owner == null && (ctx.truncated || idx.addedAnywhere(name))) return ctx.truncated ? undefined : { status: 'kept', file: null, tree: true };
+  // A file the diff shows that loses the declaration without the diff showing it go: the reading
+  // of one side is wrong, so the tree says nothing.
+  if (idx.shown(from.p) && !idx.removedFrom(name, from.p)) return undefined;
   return { status: 'gone', file: from.p, tree: true };
 }
 
@@ -1181,8 +1214,9 @@ function confirmArity(ctx, idx, ref, s) {
   return fits ? { status: 'kept', file: path, tree: true, basis: 'diff', overload: true } : { ...s, confirmed: true };
 }
 
-// Resource ids by stem, per tree: [{ path, dir, base }] for files under data/<ns>/ or assets/<ns>/.
-const RES_FILE = /(?:^|\/)((?:data|assets)\/([^/]+)\/)(?:.*\/)?([^/]+)\.(json|lang|properties|toml|ya?ml|nbt|png|ogg)$/i;
+// Resource ids by stem, per tree: [{ path, dir, base }] for files under data/<ns>/ or assets/<ns>/,
+// of the same kinds the diff reads ids from (goneResources), so a tree never says more than the diff.
+const RES_FILE = /(?:^|\/)((?:data|assets)\/([^/]+)\/)(?:.*\/)?([^/]+)\.(json|lang|properties|toml|ya?ml)$/i;
 function resourcesOf(ctx, side) {
   const memo = memoOf(ctx.trees);
   const key = `res\0${side}`;
@@ -1272,6 +1306,10 @@ export function subjectRefs(ctx, f, text) {
         const key = (r) => `${r.kind}|${r.recv}|${r.name}|${r.arity}`;
         const before = new Map(refsOf(text, f, t.alone).map(r => [key(r), refStatus(idx, r)]));
         for (const x of refs) if (x.s?.status === 'kept' && !before.get(key(x.r))) x.s = null;
+        // The other way round too: what the diff alone placed (a reshaped call, a gone one) is not
+        // dropped because the whole file stops the mirror guess. Only a name the test turns out to
+        // declare itself stops being a ref.
+        for (const x of refs) if (!x.s && before.get(key(x.r)) && !t.own.has(x.r.name)) x.s = before.get(key(x.r));
       }
     }
   }

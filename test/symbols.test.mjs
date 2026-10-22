@@ -186,6 +186,10 @@ test('codeOnly blanks comments and strings, keeping quotes and columns', () => {
   // A quote inside a comment is part of the comment.
   assert.deepEqual(codeOnly("// it's\nint a;", 'jvm'), ['       ', 'int a;']);
   assert.deepEqual(codeOnly('just text', 'go'), ['just text']);
+  // A js regex literal is one unit: a backtick or /* inside it opens nothing, and a / after a value is division.
+  assert.deepEqual(codeOnly('const T = /`/g;\nfunction f() {}', 'js'), ['const T = / /g;', 'function f() {}']);
+  assert.deepEqual(codeOnly("s = x.replace(/\\/*$/, '');\nexport function g() {}", 'js'), ["s = x.replace(/    /, '');",'export function g() {}']);
+  assert.deepEqual(codeOnly('if (a) return /[/]x/.test(s);\nlet h = a / b / c;', 'js'), ['if (a) return /    /.test(s);', 'let h = a / b / c;']);
 });
 
 test('indexText reads declarations with their owners, records and data classes', () => {
