@@ -20,6 +20,8 @@ test('jvm declarations: types, methods with arity, final fields and enum constan
   assert.deepEqual(names('    return compute(a) {', 'jvm'), []);
   assert.deepEqual(names('  // static int gone(int a) {', 'jvm'), []);
   assert.deepEqual(names('  fun total(cart: Cart): Int {', 'jvm'), ['fn:total/1']);
+  assert.deepEqual(names('  public static @Nullable String refusal(ItemCounters c, int stars, @Nullable String key) {', 'jvm'), ['fn:refusal/3']);
+  assert.deepEqual(names('  @Deprecated public static final int MAX = 3;', 'jvm'), ['field:MAX']);
 });
 
 test('js, py, go and rust declarations', () => {
