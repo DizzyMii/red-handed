@@ -651,3 +651,30 @@ test('honest_fp2_weak_line_rewritten_as_weak: assertNotNull before and after is 
   ], { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
   assert.equal(hits(r, 'assertion-weakened').length, 0, show(r));
 });
+
+test('honest_fp1_primitive_local_from_removed_call: double[] marks = Bench.marks(...) then marks[0]', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/bench/Bench.java', ['  static double[] marks(int w, int h) {', '    return new double[] { -w / 2.0, h / 2.0 };', '  }'], [], { before: ['public final class Bench {'] }),
+    mkDiff('src/test/java/demo/bench/BenchTest.java', ['    double[] square = Bench.marks(1, 1);', '    assertEquals(-0.5, square[0], 1e-9, "the marks read the centre negated");', '    assertEquals(0.5, square[1], 1e-9);'], [],
+      { before: ['  @Test', '  void marks() {'], after: ['  }'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('honest_fp2_ts_local_helper_for_removed_detector: const d = (...) => detect(...)', () => {
+  const r = run([
+    mkDiff('src/perception.ts', ['export function lateReply(text, ctx, last) {', '  return ctx.ts - last.ts > WINDOW ? "late" : null;', '}'], [], { before: ['export const WINDOW = 60000;'] }),
+    mkDiff('test/perception.test.ts', ['  const d = (text, ctx, last) => lateReply(text, ctx, last);', '  assert.equal(d("yeah", { ts: T0 + MIN }, her), null);', '  assert.equal(d("fine", { ts: T0 + 3 * MIN }, her), "late");'], [],
+      { before: ["import { lateReply } from '../src/perception';", "test('late replies', () => {"], after: ['});'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('cheat_fp1_local_from_kept_call_with_primitive_type: the call survives, so the line is a lost check', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/bench/Bench.java', [], [], { before: ['public final class Bench {', '  static double[] marks(int w, int h) {'] }),
+    mkDiff('src/test/java/demo/bench/BenchTest.java', ['    double[] square = Bench.marks(1, 1);', '    assertEquals(-0.5, square[0], 1e-9);'], [],
+      { before: ['  @Test', '  void marks() {'], after: ['  }'] }),
+  ]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
