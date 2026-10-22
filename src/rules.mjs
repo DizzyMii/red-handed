@@ -1165,6 +1165,11 @@ function pairRewrites(ctx, f, removed, added) {
   }
   const idx = sourceIndex(ctx);
   const flatKeys = bucket(a => flattenCheck(msgless(a.text)));
+  // When a line names nothing the diff can place (a local helper set up above the hunk), the
+  // production file the test mirrors stands in for it, if this change edits its code. Code the
+  // line does name and that stays untouched still rules a rewrite out.
+  const mirror = idx.mirrorEdited(pathOf(f));
+  const mirrorRef = mirror && { name: baseName(mirror).replace(/\.[^.]+$/, ''), file: mirror, kind: 'file', status: 'kept' };
   const basis = new Map();
   const pairs = new Map();
   // Exact rewrites first, so a check that only matches up to its expected value cannot take the
@@ -1174,7 +1179,9 @@ function pairRewrites(ctx, f, removed, added) {
       if (same.has(r) || pairs.has(r)) continue;
       if (!basis.has(r)) {
         const refs = subjectRefs(ctx, f, r.text);
-        basis.set(r, refs.length ? rewriteBasis(idx, refs) : null);
+        let b = refs.length ? rewriteBasis(idx, refs) : null;
+        if (mirrorRef && !b?.changed && !refs.some(q => q.status === 'kept')) b = { tx: b?.tx ?? null, why: b?.why ?? null, changed: mirrorRef };
+        basis.set(r, b);
       }
       const b = basis.get(r);
       if (!b || (exact && !b.tx) || (!exact && !b.changed)) continue;
@@ -1217,7 +1224,7 @@ function comparesReal(t) {
     const right = argUpToClose(t.slice(m.index + m[0].length)).split(/&&|\|\|/)[0].trim();
     if (left && right && !trivialOperand(left) && !trivialOperand(right)) return true;
   }
-  for (const m of t.matchAll(/[\w$)\]]\s*\.(?:equals|contains)\s*\(/g)) {
+  for (const m of t.matchAll(/[\w$)\]]\s*\.(?:equals|contains|containsAll)\s*\(/g)) {
     const arg = argUpToClose(t.slice(m.index + m[0].length));
     if (arg && !trivialOperand(arg)) return true;
   }
@@ -1590,7 +1597,12 @@ export const RULES = [
           // The precise check called code this change removed, renamed or re-shaped. A looser check that
           // still compares two real things, or asks a yes or no of a function the change adds, is how such
           // a rewrite often looks; anything looser than that stays a fail.
-          const changed = removedStrong.map(l => subjectRefs(ctx, f, l.text).find(q => q.status === 'gone' || q.status === 'renamed' || q.status === 'arity')).find(Boolean);
+          const strongRefs = removedStrong.map(l => subjectRefs(ctx, f, l.text));
+          // Failing that, the production file the test is named for, when the change edits its code and
+          // the precise check named nothing in the diff that stays as it was.
+          const mirror = sourceIndex(ctx).mirrorEdited(pathOf(f));
+          const changed = strongRefs.map(refs => refs.find(q => q.status === 'gone' || q.status === 'renamed' || q.status === 'arity')).find(Boolean)
+            ?? (mirror && !strongRefs.flat().some(q => q.status === 'kept') ? { name: null, file: mirror } : null);
           // A weak line that is the rewrite of a line just as weak loosened nothing.
           const asserts = (kind, side) => code(kind).filter(l => isAssertLine(l.text)).map(l => ({ line: l[side], text: l.text, l }));
           const { same, pairs } = pairRewrites(ctx, f, asserts('-', 'oldLine'), asserts('+', 'newLine'));
@@ -1603,7 +1615,7 @@ export const RULES = [
             const idx = sourceIndex(ctx);
             const checked = changed != null && (comparesReal(w.text) || (callee != null && idx.newlyDeclared(callee) && !idx.constantBody(callee)));
             add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
-              ? `A precise assertion was replaced by a looser one in the same change that removed or renamed ${changed.name} in ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
+              ? `A precise assertion was replaced by a looser one in the same change that ${changed.name ? `removed or renamed ${changed.name} in` : 'edits'} ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
               : undefined, checked);
           }
         }

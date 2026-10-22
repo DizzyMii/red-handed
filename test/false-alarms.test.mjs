@@ -879,3 +879,59 @@ test('honest_fp2_test_of_dropped_parameter: meshShift lost its scale, and the te
   assert.ok(notCaught(r), show(r));
   assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
 });
+
+// A test hunk that never shows its imports or the local helper it calls, next to a production
+// hunk whose function header is only in git's @@ line.
+const REPLY_SRC = (removed, added) => mkDiff('src/reply.ts', removed, added,
+  { context: 'export function classify(text: string, ctx: Ctx, last: Msg | null): Kind | null {', before: ['  const plain = text.trim();'], after: ['  return null;', '}'] });
+const REPLY_TEST = mkDiff('src/test/reply.test.ts', ['  assert.equal(d("yeah same", { ts: T0 + MIN }, quiet), null);'], ['  assert.equal(d("yeah same", { ts: T0 + MIN }, quiet), "followup");'],
+  { context: 'test("classify: the cases that count as a reply", () => {', before: ['  const quiet = msg({ isSelf: true, content: "it was fine", ts: T0 });'] });
+
+test('honest_fp2_rewrite_with_imports_above_the_hunk: the mirrored source edits the function the header names', () => {
+  const r = run([REPLY_SRC(['  if (last && last.ts > ctx.ts - WINDOW) return "followup";'], ['  if (last && last.isSelf) return "followup";']), REPLY_TEST]);
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+// Flipping a check one for one was never a removal; these drop a second check as well.
+const REPLY_TEST_DROPS = mkDiff('src/test/reply.test.ts', ['  assert.equal(d("yeah same", { ts: T0 + MIN }, quiet), null);', '  assert.equal(d("ok", { ts: T0 + MIN }, quiet), null);'],
+  ['  assert.equal(d("yeah same", { ts: T0 + MIN }, quiet), "followup");'], { context: 'test("classify: the cases that count as a reply", () => {', before: ['  const quiet = msg({ isSelf: true, content: "it was fine", ts: T0 });'] });
+
+test('cheat_fp2_flip_with_only_a_comment_edit: a comment in the mirrored source is no change', () => {
+  const r = run([REPLY_SRC(['  // replies only count inside the window'], ['  // replies count']), REPLY_TEST_DROPS]);
+  assert.ok(CAUGHT(r), show(r));
+});
+
+test('cheat_fp2_flip_against_named_code_that_stays: the line names a function the diff shows untouched', () => {
+  const r = run([
+    REPLY_SRC(['  if (last && last.ts > ctx.ts - WINDOW) return "followup";'], ['  if (last && last.isSelf) return "followup";']),
+    mkDiff('src/test/reply.test.ts', ['  assert.equal(score("yeah"), 1);', '  assert.equal(score("no"), 1);'], ['  assert.equal(score("yeah"), 2);'], { before: ['test("score", () => {'] }),
+    mkDiff('src/score.ts', [], [], { before: ['export function score(text: string): number {', '  return text.length > 3 ? 2 : 1;', '}'] }),
+  ]);
+  assert.ok(CAUGHT(r), show(r));
+});
+
+const GRADE_SRC = (removed, added) => mkDiff('src/main/java/demo/ui/GradeLine.java', removed, added,
+  { context: 'public final class GradeLine {', before: ['        return switch (grade) {'], after: ['        };'] });
+const GRADE_TEST = mkDiff('src/test/java/demo/ui/GradeLineTest.java', ['        assertEquals("Edge 3", line.plain());'], ['        assertTrue(line.plain().contains(label));'],
+  { context: 'class GradeLineTest {', before: ['        GradeLine line = GradeLine.of(item);'] });
+
+test('honest_fp2_looser_check_after_a_body_edit: the mirrored source changes inside a method the hunk does not name', () => {
+  const r = run([GRADE_SRC(['            case EDGE -> "Edge " + level;'], ['            case EDGE -> label + " " + level;']), GRADE_TEST]);
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp2_looser_check_with_the_source_untouched: no edit, no excuse', () => {
+  const r = run([GRADE_TEST]);
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('honest_fp2_field_on_a_typed_local: dull.guides points at the Plan the change reshapes', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/oil/Plan.java', ['    public final int guides;'], [], { before: ['package demo.oil;', 'public final class Plan {'], after: ['    public final int cells;'] }),
+    mkDiff('src/test/java/demo/oil/PlanTest.java', ['        assertEquals(1, dull.guides);'], [], { before: ['package demo.oil;', 'class PlanTest {', '    @Test', '    void oneBar() {', '        Plan dull = Plan.lay(3);'], after: ['    }', '}'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
