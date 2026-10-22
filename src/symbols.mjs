@@ -266,6 +266,7 @@ export function sourceIndex(ctx) {
     },
     // The file a gone name was declared in, for the message.
     goneFrom(name, where) { return named(name).find(d => d.side === '-' && where(d))?.rec.path ?? null; },
+    declaredIn(name, where) { return named(name).find(d => where(d))?.rec.path ?? null; },
     // One declaration swapped for one other of the same kind and arity in the same hunk.
     renamed(name, where) {
       for (const d of named(name)) {
@@ -473,7 +474,7 @@ export function refStatus(idx, ref) {
   if (idx.renamed(ref.name, ref.where)) return { status: 'renamed', file: idx.goneFrom(ref.name, ref.where), to: idx.renamed(ref.name, ref.where) };
   if (idx.arityChanged(ref.name, ref.where)) return { status: 'arity', file: idx.goneFrom(ref.name, ref.where) };
   if (idx.gone(ref.name, ref.where, ref.arity)) return { status: 'gone', file: idx.goneFrom(ref.name, ref.where) };
-  return { status: 'kept', file: null };
+  return { status: 'kept', file: idx.declaredIn(ref.name, ref.where) };
 }
 
 // The refs on a line that the diff knows about, each with its status.
