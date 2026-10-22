@@ -527,7 +527,8 @@ export function testContext(f) {
       const init = /^\s*(?:final\s+)?([A-Za-z_$][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=(?!\s*new\s)\s*(.*\(.*)$/.exec(t);
       if (init && !NOT_A_NAME.has(init[1].trim())) info.inits.set(init[2], init[3]);
       const st =/^\s*import\s+static\s+([\w.]+)\.([A-Za-z_$][\w$]*)\.([\w$*]+)\s*;?/.exec(t);
-      if (st) { info.statics.set(st[3], { pkg: st[1], owner: st[2] }); continue; }
+      // A nested owner (import static a.b.Outer.Slot.HEAD) sits in package a.b.
+      if (st) { info.statics.set(st[3], { pkg: st[1].replace(/(?:\.[A-Z][\w$]*)+$/, ''), owner: st[2] }); continue; }
       const im = /^\s*(?:import|using)\s+([\w.]+)\.([A-Za-z_$][\w$]*|\*)\s*;?\s*$/.exec(t);
       if (im) {
         if (im[2] === '*') info.wild.add(im[1]);
