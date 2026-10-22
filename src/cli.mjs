@@ -104,6 +104,8 @@ export async function main(argv = [], io = {}) {
     }
     if (opts.target === 'demo') return await runDemo(io, { noColor: opts.noColor });
     const source = await buildSource(opts, io);
+    // A pull request has no checkout, so the files around the diff are fetched for what the scan asks.
+    if (source.kind === 'pr' && source.loadTrees) await source.loadTrees();
     const result = scan(source);
     if (opts.format === 'json') io.stdout.write(json(result));
     else if (opts.format === 'markdown') io.stdout.write(markdown(result));

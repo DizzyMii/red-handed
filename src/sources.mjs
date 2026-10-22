@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseDiff } from './diff.mjs';
+import { planReads } from './scan.mjs';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const BASE_CANDIDATES = ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master'];
@@ -255,7 +256,7 @@ export async function prSource(spec, { fetch = globalThis.fetch, env = {}, versi
   const login = meta.user?.login ?? null;
   const isBot = meta.user ? meta.user.type === 'Bot' : null;
   const title = (meta.title ?? '').replace(/\s+/g, ' ').trim();
-  return {
+  const source = {
     kind: 'pr',
     label: `${pr.owner}/${pr.repo}#${pr.number}  "${title}"${login ? `  by ${login}${isBot ? ' (bot)' : ''}` : ''}`,
     base: meta.base?.ref ?? null,
@@ -267,5 +268,105 @@ export async function prSource(spec, { fetch = globalThis.fetch, env = {}, versi
     untracked: [],
     notes: [],
     baseFile: () => null,
+    baseTipSha: meta.base?.sha ?? null,
+    headSha: meta.head?.sha ?? null,
+    repoPath: `${pr.owner}/${pr.repo}`,
   };
+  // Kept off the source's data so the token never travels with it.
+  source.loadTrees = (o = {}) => loadPrTrees(source, { fetch, token, version, ...o });
+  return source;
+}
+
+const MAX_TREE_ROUNDS = 3;
+const TREE_CONCURRENCY = 8;
+
+// A tree view over Maps, filled as PR mode fetches: list() is null until a listing is in, a path
+// not fetched is unknown, and one the listing does not have is absent.
+function mapView() {
+  const files = new Map();
+  let listed = null;
+  let set = null;
+  return {
+    capped: false,
+    files,
+    setList(paths) { listed = [...paths].sort(); set = new Set(listed); },
+    list: () => listed,
+    read: (p) => (files.has(p) ? files.get(p) : set && !set.has(p) ? null : undefined),
+  };
+}
+
+// Fills source.trees for a pull request with what a scan asks for and cannot answer: planReads
+// says what, this fetches it from the merge base and the head, and asks again, up to 3 rounds.
+// It never throws. A failure becomes a note and leaves the rest unknown, which the engine reads
+// as "judge on the diff alone".
+export async function loadPrTrees(source, { fetch, token = '', version = '0.0.0', maxFiles } = {}) {
+  const views = { base: mapView(), head: mapView() };
+  source.trees = views;
+  const notes = source.notes;
+  const limit = maxFiles ?? (token ? 100 : 15);
+  const api = `https://api.github.com/repos/${source.repoPath}`;
+  const get = async (url, accept) => {
+    const headers = { Accept: accept, 'User-Agent': `red-handed/${version}`, 'X-GitHub-Api-Version': '2022-11-28' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    try { return await fetch(url, { headers }); } catch { return null; }
+  };
+  const limited = (res) => res != null && /rate limit/.test(failure(res, false).message) && (res.status === 429 || res.status === 403);
+
+  let want = planReads(source);
+  const asks = (w) => w.base.length || w.head.length || w.lists.base || w.lists.head;
+  if (!asks(want) || !source.headSha || !source.baseTipSha) return;
+
+  let baseSha = source.baseTipSha;
+  const cmp = await get(`${api}/compare/${source.baseTipSha}...${source.headSha}?per_page=1`, 'application/vnd.github+json');
+  const mb = cmp?.ok ? (await cmp.json().catch(() => null))?.merge_base_commit?.sha : null;
+  if (mb) baseSha = mb;
+  else notes.push('could not ask GitHub for the merge base, so the base files are read at the base branch tip');
+  const sha = { base: baseSha, head: source.headSha };
+
+  const listedSides = new Set();
+  let read = 0;
+  let fetched = 0;
+  let stopped = null;
+  for (let round = 0; round < MAX_TREE_ROUNDS && asks(want) && !stopped; round++) {
+    // Listings first: with them in, the next plan asks for exact paths only.
+    let listedNow = false;
+    for (const side of ['base', 'head']) {
+      if (!want.lists[side] || listedSides.has(side)) continue;
+      listedSides.add(side);
+      listedNow = true;
+      const res = await get(`${api}/git/trees/${sha[side]}?recursive=1`, 'application/vnd.github+json');
+      const body = res?.ok ? await res.json().catch(() => null) : null;
+      if (body && !body.truncated && Array.isArray(body.tree)) views[side].setList(body.tree.filter(e => e.type === 'blob').map(e => e.path));
+      else notes.push(`GitHub did not list every file of ${sha[side].slice(0, 7)}, so files were only found by import path`);
+    }
+    if (listedNow) want = planReads(source);
+    const queue = [...want.base.map(p => ['base', p]), ...want.head.map(p => ['head', p])]
+      .filter(([side, p]) => !views[side].files.has(p));
+    if (!queue.length) break;
+    // Requests run a few at a time; each answer lands in its own slot, so order does not matter.
+    while (queue.length && !stopped) {
+      const batch = [];
+      while (queue.length && batch.length < TREE_CONCURRENCY) {
+        if (read >= limit) { stopped = 'cap'; break; }
+        batch.push(queue.shift());
+        read++;
+      }
+      const answers = await Promise.all(batch.map(async ([side, p]) => {
+        const res = await get(`${api}/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${sha[side]}`, 'application/vnd.github.raw');
+        if (res?.status === 404) return [side, p, null];
+        if (limited(res)) return [side, p, 'limited'];
+        if (!res?.ok) return [side, p, undefined];
+        const text = await res.text().catch(() => undefined);
+        return [side, p, typeof text === 'string' && text.length <= 2 * 1024 * 1024 && !text.includes('\0') ? text.replace(/\r\n/g, '\n') : undefined];
+      }));
+      for (const [side, p, v] of answers) {
+        if (v === 'limited') { stopped = 'rate'; continue; }
+        if (v !== undefined) views[side].files.set(p, v);
+        fetched++;
+      }
+      if (stopped === 'rate') notes.push(`GitHub rate limit hit after reading ${fetched} files; the rest were judged on the diff alone. Set GITHUB_TOKEN`);
+    }
+    if (stopped === 'cap') notes.push(`read ${read} files from the base and head trees and stopped at the limit of ${limit}; checks that needed more were judged on the diff alone`);
+    if (!stopped) want = planReads(source);
+  }
 }
