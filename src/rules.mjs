@@ -4,6 +4,7 @@
 import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
+import { splitTop, normalised } from './symbols.mjs';
 
 export function clip(s) {
   if (s == null) return null;
@@ -406,10 +407,6 @@ function ciContinueOnError(f) {
   return out;
 }
 
-// A deleted or moved test line can be matched against an added one with other names for things.
-const IDENT = /(?<![.\w$])[A-Za-z_$][\w$]*\b(?!\s*\()/g;
-const normalised = (t) => t.trim().replace(IDENT, 'I').replace(/\s+/g, ' ');
-
 // The lines of `f` the assertion rules may judge: all of them in a test file, and in a Rust source
 // file only the hunks that sit next to #[test] or #[cfg(test)]. Null when none.
 function testScope(ctx, f) {
@@ -605,28 +602,6 @@ const STUB_DO = /\bdo(?:Return|Answer|Nothing|Throw)\s*\(.*?\)\s*\.when\s*\(\s*(
 const STUB_WHEN = /\bwhen\s*\(\s*(\w+)\.(\w+)\s*\(/;
 const LITERAL_ONLY = /^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?[LfFdD]?|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)$/;
 const EXPECT_CALL = /\.to\s+(?:eq|eql|equal|be)\s*\(|\.(?:toBe|toEqual|toStrictEqual)\s*\(|\bassert_equal\s+|\bassertEquals?\s*\(|\bassert_eq!\s*\(/;
-
-// Splits at the commas that are not inside brackets or quotes.
-function splitTop(s) {
-  const out = [];
-  let depth = 0;
-  let quote = null;
-  let cur = '';
-  for (let k = 0; k < s.length; k++) {
-    const ch = s[k];
-    if (quote) {
-      cur += ch;
-      if (ch === '\\') cur += s[++k] ?? '';
-      else if (ch === quote) quote = null;
-    } else if (ch === '"' || ch === "'" || ch === '`') { quote = ch; cur += ch; }
-    else if ('([{'.includes(ch)) { depth++; cur += ch; }
-    else if (')]}'.includes(ch)) { depth--; cur += ch; }
-    else if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
 
 // The text of a call argument that starts at the front of s, up to the bracket that closes the call.
 function argUpToClose(s) {
