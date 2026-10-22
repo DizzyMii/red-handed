@@ -1068,14 +1068,15 @@ function dropArgs(t, name) {
 
 // The ref that makes removed line x and added line y one check rewritten: equal once the calls
 // whose arity changed lose their arguments and renamed names take the new name, or equal up to
-// the expected value when the change edits code the line calls. Null when there is none.
-function rewriteRef(idx, refs, x, y) {
+// the expected value when the change edits code the line calls (not when `exact`). Null when there is none.
+function rewriteRef(idx, refs, x, y, exact) {
   let why = null;
   for (const q of refs) {
     if (q.status === 'arity') { x = dropArgs(x, q.name); y = dropArgs(y, q.name); why ??= q; }
     if (q.status === 'renamed') { x = x.replace(new RegExp(`(?<![\\w$])${escapeName(q.name)}(?![\\w$])`, 'g'), q.to); why ??= q; }
   }
   if (why && x === y) return why;
+  if (exact) return null;
   const changed = refs.find(q => q.status === 'renamed' || q.status === 'arity'
     || (q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where)));
   return changed && flattenCheck(x) === flattenCheck(y) ? changed : null;
@@ -1089,20 +1090,24 @@ function pairRewrites(ctx, f, removed, added) {
   const msgless = (t) => collapse(dropMessage(t, { jupiter }));
   const free = new Set(added);
   const nearest = (r) => [...free].sort((x, y) => Math.abs(x.line - r.line) - Math.abs(y.line - r.line));
-  const same = new Set();
+  const same = new Map();
   for (const r of removed) {
     const a = nearest(r).find(x => msgless(x.text) === msgless(r.text));
-    if (a) { free.delete(a); same.add(r); }
+    if (a) { free.delete(a); same.set(r, a); }
   }
   const idx = sourceIndex(ctx);
   const pairs = new Map();
-  for (const r of removed) {
-    if (same.has(r)) continue;
-    const refs = subjectRefs(ctx, f, r.text);
-    if (!refs.length) continue;
-    for (const a of nearest(r)) {
-      const ref = rewriteRef(idx, refs, msgless(r.text), msgless(a.text));
-      if (ref) { free.delete(a); pairs.set(r, { a, ref }); break; }
+  // Exact rewrites first, so a check that only matches up to its expected value cannot take the
+  // partner of one that matches outright.
+  for (const exact of [true, false]) {
+    for (const r of removed) {
+      if (same.has(r) || pairs.has(r)) continue;
+      const refs = subjectRefs(ctx, f, r.text);
+      if (!refs.length) continue;
+      for (const a of nearest(r)) {
+        const ref = rewriteRef(idx, refs, msgless(r.text), msgless(a.text), exact);
+        if (ref) { free.delete(a); pairs.set(r, { a, ref }); break; }
+      }
     }
   }
   return { same, pairs, addedLeft: [...free] };
@@ -1464,7 +1469,13 @@ export const RULES = [
           // still compares two real things, or asks a yes or no of a function the change adds, is how such
           // a rewrite often looks; anything looser than that stays a fail.
           const changed = removedStrong.map(l => subjectRefs(ctx, f, l.text).find(q => q.status === 'gone' || q.status === 'renamed' || q.status === 'arity')).find(Boolean);
+          // A weak line that is the rewrite of a line just as weak loosened nothing.
+          const asserts = (kind, side) => code(kind).filter(l => isAssertLine(l.text)).map(l => ({ line: l[side], text: l.text, l }));
+          const { same, pairs } = pairRewrites(ctx, f, asserts('-', 'oldLine'), asserts('+', 'newLine'));
+          const wasWeak = new Set([...same, ...[...pairs].map(([r, p]) => [r, p.a])]
+            .filter(([r]) => !STRONG.test(r.text) || BOOL_COMPARE.test(r.text)).map(([, a]) => a.l));
           for (const w of addedWeak) {
+            if (wasWeak.has(w)) continue;
             const callee = changed && predicateCallee(w.text);
             const checked = changed != null && (comparesReal(w.text) || (callee != null && sourceIndex(ctx).newlyDeclared(callee)));
             add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
