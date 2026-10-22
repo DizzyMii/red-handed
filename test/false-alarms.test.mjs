@@ -1103,3 +1103,9 @@ test('cheat_fp5_loose_check_on_a_trivial_bound: a bound nothing can miss is no c
   const r = run(PLAN_TEST(['  assert.ok(steps.length > 0);']));
   assert.ok(hard(r, 'assertion-weakened').length > 0, show(r));
 });
+
+test('cheat_fp5_precise_check_swapped_for_one_about_other_values: nothing in the hunk shows new behaviour', () => {
+  const r = run(mkDiff('src/test/planner.test.ts', ['  assert.equal(steps[4].text, "fixed");'], ['  assert.ok(steps[2].ms >= 800 && steps[2].ms <= 2000);'],
+    { before: ['import { plan } from "../planner";', 'test("a typo fix", () => {', '  const steps = plan("fixd");'], after: ['});'] }));
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
