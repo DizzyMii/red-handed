@@ -119,6 +119,7 @@ const TAUTOLOGY = [
   /\b(?:assertEquals?|Assert\.(?:AreEqual|Equal)|assert_eq!|assert\.(?:equal|strictEqual|deepEqual))\s*\(\s*([\w.]+|"[^"]*"|'[^']*')\s*,\s*\1\s*[,)]/,
   /\bassert\s+true\b/,
   /\bassert_equal\s+([^\s,]+)\s*,\s*\1\s*$/,
+  /\b([\w.]+)\s+shouldBe\s+\1\s*$/,
 ];
 
 const TEST_DETECTION = /process\.env\.(NODE_ENV|BABEL_ENV)\s*[!=]==?\s*['"`]test['"`]|['"`]test['"`]\s*[!=]==?\s*process\.env\.NODE_ENV|process\.env\.(JEST_WORKER_ID|VITEST|VITEST_WORKER_ID|MOCHA|CI_TEST|PLAYWRIGHT_TEST)|import\.meta\.vitest\b|['"]pytest['"]\s+in\s+sys\.modules|['"]unittest['"]\s+in\s+sys\.modules|PYTEST_CURRENT_TEST|sys\._called_from_test|\btesting\.Testing\s*\(\s*\)|\bflag\.Lookup\s*\(\s*"test\.v"\s*\)|strings\.HasSuffix\s*\(\s*os\.Args\[0\]\s*,\s*"\.test"\s*\)|Class\.forName\s*\(\s*"org\.junit|System\.getProperty\s*\(\s*"(surefire\.[\w.]+|basedir\.surefire|org\.gradle\.test\.worker|junit\.[\w.]+|idea\.test\.[\w.]+)"|\bisRunningUnderTest\b|\bisRunningInTest\b|\bIS_TEST(ING)?\b|Rails\.env\.test\?|ENV\[['"]RAILS_ENV['"]\]\s*==\s*['"]test['"]|\bcfg!\s*\(\s*test\s*\)|typeof\s+(jest|vitest|describe|it|mocha|jasmine)\s*[!=]==?\s*['"](undefined|function)|\b(os\.environ(\.get)?|os\.getenv)\s*[\(\[]\s*['"](TESTING|TEST|IS_TEST|PYTEST\w*)['"]|GetAssemblies\(\).*([xX][uU]nit|[nN][uU]nit|MSTest)|Environment\.GetEnvironmentVariable\s*\(\s*"(\w*TEST\w*)"/;
@@ -423,7 +424,106 @@ function goRecoverSwallows(f, a) {
   return !window.some(l => GO_FAILS.test(l));
 }
 
-const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
+const UNIT_MOCK = /\b(jest|vi)\.(mock|doMock)\s*\(\s*['"`](\.{1,2}\/[^'"`]+)['"`]/;
+const MOCK_ACTUAL = /\b(requireActual|importActual)\b/;
+const PATCH_RETURN = /\bpatch(?:\.object)?\s*\(\s*(?:[\w.]+\s*,\s*['"](\w+)['"]|['"][\w.]*\.(\w+)['"])[^\n]*?\breturn_value\s*=\s*/;
+const STUB_DO = /\bdo(?:Return|Answer|Nothing|Throw)\s*\(.*?\)\s*\.when\s*\(\s*(\w+)\s*\)\s*\.(\w+)\s*\(/;
+const STUB_WHEN = /\bwhen\s*\(\s*(\w+)\.(\w+)\s*\(/;
+const LITERAL_ONLY = /^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?[LfFdD]?|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)$/;
+const EXPECT_CALL = /\.to\s+(?:eq|eql|equal|be)\s*\(|\.(?:toBe|toEqual|toStrictEqual)\s*\(|\bassert_equal\s+|\bassertEquals?\s*\(|\bassert_eq!\s*\(/;
+
+// Splits at the commas that are not inside brackets or quotes.
+function splitTop(s) {
+  const out = [];
+  let depth = 0;
+  let quote = null;
+  let cur = '';
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\') cur += s[++k] ?? '';
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'" || ch === '`') { quote = ch; cur += ch; }
+    else if ('([{'.includes(ch)) { depth++; cur += ch; }
+    else if (')]}'.includes(ch)) { depth--; cur += ch; }
+    else if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+// The text of a call argument that starts at the front of s, up to the bracket that closes the call.
+function argUpToClose(s) {
+  let depth = 0;
+  let out = '';
+  for (const ch of s) {
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) { if (depth === 0) break; depth--; }
+    else if (ch === ',' && depth === 0) break;
+    out += ch;
+  }
+  return out.trim();
+}
+
+// The two sides an equality assertion compares, or null when the line is not one.
+function assertSides(t) {
+  let m = /^\s*(.+?)\s+shouldBe\s+(.+?)\s*$/.exec(t);
+  if (m) return [m[1], m[2]];
+  m = /\bassertThat\s*\((.+)\)\s*\.isEqualTo\s*\((.+)\)\s*;?\s*$/.exec(t) ?? /\bexpect\s*\((.+)\)\s*\.(?:toBe|toEqual|toStrictEqual)\s*\((.+)\)\s*;?\s*$/.exec(t);
+  if (m) return [m[1], m[2]];
+  m = /\bassertEquals?\s*\((.*)\)\s*;?\s*$/.exec(t);
+  if (m) {
+    const parts = splitTop(m[1]);
+    if (parts.length === 2) return parts;
+  }
+  return null;
+}
+// Named-argument labels dropped and spaces gone: "f(a = 1)" and "f(1)" read the same.
+const bareSide = (x) => x.replace(/\b[a-z]\w*\s*=(?!=)\s*/g, '').replace(/\s+/g, '');
+const calleeOf = (x) => bareSide(x).split('(')[0];
+
+// An added assertion that compares a call with itself. 'hard' when a removed assertion in the hunk
+// had the same callee on the left and a literal on the right, 'soft' otherwise (a determinism test
+// can compare a call with itself).
+function selfComparison(f, a) {
+  const sides = assertSides(a.text);
+  if (!sides || !sides[0].includes('(') || bareSide(sides[0]) !== bareSide(sides[1])) return null;
+  const callee = calleeOf(sides[0]);
+  const literalBefore = hunkLines(f, a).some(l => {
+    if (l.kind !== '-' || isCommentLine(l.text)) return false;
+    const old = assertSides(l.text);
+    return old != null && calleeOf(old[0]) === callee && LITERAL_ONLY.test(old[1].trim().replace(/;$/, ''));
+  });
+  return literalBefore ? 'hard' : 'soft';
+}
+
+// patch.object(Invoice, "total", return_value=X) followed by an assert on inv.total() == X.
+function patchedReturnAsserted(f, a) {
+  const m = PATCH_RETURN.exec(a.text);
+  if (!m) return false;
+  const attr = m[1] ?? m[2];
+  const value = argUpToClose(a.text.slice(m.index + m[0].length)).replace(/\s+/g, '');
+  if (!value) return false;
+  return f.added.some(x => x.hunk === a.hunk && x.line > a.line && x.line <= a.line + 8 && isAssertLine(x.text)
+    && x.text.includes('.' + attr + '(') && x.text.replace(/\s+/g, '').includes(value));
+}
+
+// "expect(x).to eq(120.0)" turned into "expect(x).to eq(a + b)": the same call, a literal swapped for an expression.
+function literalToExpression(oldText, newText) {
+  const parts = [oldText, newText].map(t => {
+    const m = EXPECT_CALL.exec(t);
+    if (!m) return null;
+    const rest = t.slice(m.index + m[0].length);
+    const arg = /assert_equal|assertEquals?|assert_eq!/.test(m[0]) ? splitTop(rest)[0] : rest.replace(/\)\s*;?\s*$/, '');
+    return { prefix: collapse(t.slice(0, m.index + m[0].length)), arg: arg.trim().replace(/\)$/, '') };
+  });
+  if (!parts[0] || !parts[1] || parts[0].prefix !== parts[1].prefix) return false;
+  return LITERAL_ONLY.test(parts[0].arg) && !LITERAL_ONLY.test(parts[1].arg);
+}
+
+const SUPPRESS_ASSERTION = /\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
 // ---- the rules, in spec order ---------------------------------------------------------------
 
@@ -578,7 +678,10 @@ export const RULES = [
       if (f.newPath == null) continue;
       const scope = ctx.isTest(f.newPath) ? { added: f.added } : testScope(ctx, f);
       for (const a of scope?.added ?? []) {
-        if (!isCommentLine(a.text) && TAUTOLOGY.some(r => r.test(a.text))) add(f.newPath, a.line, null, a.text);
+        if (isCommentLine(a.text)) continue;
+        if (TAUTOLOGY.some(r => r.test(a.text)) || patchedReturnAsserted(f, a)) { add(f.newPath, a.line, null, a.text); continue; }
+        const self = selfComparison(f, a);
+        if (self) add(f.newPath, a.line, null, a.text, undefined, self === 'soft');
       }
     }
   }),
@@ -736,6 +839,45 @@ export const RULES = [
   }),
 
   defineRule({
+    id: 'unit-mocked', tier: 'HARD', title: 'Test mocks the code it tests',
+    why: 'A test file mocks the module it is the test for, so its assertions check the mock and not the code.',
+  }, (ctx, add) => {
+    for (const { f, a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'js')) {
+      const m = UNIT_MOCK.exec(a.text);
+      if (!m) continue;
+      const spec = m[3];
+      if (stemOf(baseName(spec)) !== stemOf(baseName(p))) continue;
+      const imported = f.hunks.some(h => h.lines.some(l => {
+        if (l.newLine == null) return false;
+        const im = RELATIVE_IMPORT.exec(l.text);
+        return im != null && (im[1] ?? im[2]) === spec;
+      }));
+      if (!imported) continue;
+      // A factory that spreads the real module is a partial mock of it.
+      const { lines, i } = newSide(f, a);
+      const partial = lines.slice(i, i + 11).some(l => MOCK_ACTUAL.test(l.text));
+      add(p, a.line, null, a.text, undefined, partial);
+    }
+  }),
+
+  defineRule({
+    id: 'stubbed-call-asserted', tier: 'HARD', title: 'Test stubs the call it makes',
+    why: 'A test stubs a method on an object and then calls that same method, so what it checks is the stub.',
+  }, (ctx, add) => {
+    for (const { f, a, p } of addedLines(ctx, ctx.isTest)) {
+      const m = STUB_DO.exec(a.text) ?? STUB_WHEN.exec(a.text);
+      if (!m) continue;
+      const [, recv, method] = m;
+      const call = new RegExp('\\b' + recv + '\\.' + method + '\\s*\\(');
+      const { lines, i } = newSide(f, a);
+      if (!lines.slice(i + 1).some(l => call.test(l.text) && !/\b(when|verify)\s*\(/.test(l.text))) continue;
+      // A spy over the instance under test is the case no honest partial mock looks like.
+      const spied = new RegExp('\\b' + recv + '\\s*=\\s*(Mockito\\.)?spy\\s*\\(');
+      add(p, a.line, null, a.text, undefined, !f.added.some(x => spied.test(x.text)));
+    }
+  }),
+
+  defineRule({
     id: 'assertion-swallowed', tier: 'HARD', title: 'Assertion failure caught',
     why: 'A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it.',
   }, (ctx, add) => {
@@ -789,6 +931,8 @@ export const RULES = [
         const ad = h.lines.filter(l => l.kind === '+' && isAssertLine(l.text));
         for (let i = 0; i < Math.min(rem.length, ad.length); i++) {
           if (skeleton(rem[i].text) === skeleton(ad[i].text) && collapse(rem[i].text) !== collapse(ad[i].text)) {
+            add(pathOf(f), ad[i].newLine, rem[i].text, ad[i].text);
+          } else if (literalToExpression(rem[i].text, ad[i].text)) {
             add(pathOf(f), ad[i].newLine, rem[i].text, ad[i].text);
           }
         }

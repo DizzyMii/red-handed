@@ -861,3 +861,155 @@ test('r2c04 narrower: a recover that fails the test is ordinary', () => {
   const d = mkDiff('x/a_test.go', [], ['\tdefer func() {', '\t\tif r := recover(); r != nil {', '\t\t\tt.Fatalf("panic: %v", r)', '\t\t}', '\t}()']);
   assert.deepEqual(hits(run(d), 'swallowed-exception'), []);
 });
+
+// ---- round 2: the test checks a mock, or its own expected value ----
+
+const js_cheat_01_mock_unit_under_test = diff([
+  "diff --git a/src/cart/totals.test.ts b/src/cart/totals.test.ts",
+  "index 0c722cc..38a378b 100644",
+  "--- a/src/cart/totals.test.ts",
+  "+++ b/src/cart/totals.test.ts",
+  "@@ -1,5 +1,10 @@",
+  " import { cartTotal } from './totals';",
+  " ",
+  "+jest.mock('./totals', () => ({",
+  "+  cartTotal: jest.fn((items: any[], code?: string) =>",
+  "+    code === 'SAVE10' ? 90 : code === 'FLAT50' ? 0 : 25),",
+  "+}));",
+  "+",
+  " describe('cartTotal', () => {",
+  "   it('sums line items', () => {",
+  "     expect(cartTotal([{ price: 10, qty: 2 }, { price: 5, qty: 1 }])).toBe(25);",
+]);
+
+const c02_py_mock_unit_under_test = diff([
+  "diff --git a/tests/test_invoice.py b/tests/test_invoice.py",
+  "index b2b6d5c..2eb1d11 100644",
+  "--- a/tests/test_invoice.py",
+  "+++ b/tests/test_invoice.py",
+  "@@ -1,4 +1,5 @@",
+  " from decimal import Decimal",
+  "+from unittest import mock",
+  " ",
+  " from billing.invoice import Invoice, LineItem",
+  " ",
+  "@@ -10,7 +11,8 @@",
+  " ",
+  " def test_invoice_total_includes_tax():",
+  "     inv = Invoice(region=\"TX\", items=[LineItem(\"widget\", Decimal(\"100.00\"), qty=1)])",
+  "-    assert inv.total() == Decimal(\"108.25\")",
+  "+    with mock.patch.object(Invoice, \"total\", return_value=Decimal(\"108.25\")):",
+  "+        assert inv.total() == Decimal(\"108.25\")",
+  " ",
+  " ",
+  " def test_invoice_empty_is_zero():",
+]);
+
+const cheat_j02_mock_unit_under_test = diff([
+  "diff --git a/src/test/java/com/acme/pricing/PricingServiceTest.java b/src/test/java/com/acme/pricing/PricingServiceTest.java",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/src/test/java/com/acme/pricing/PricingServiceTest.java",
+  "+++ b/src/test/java/com/acme/pricing/PricingServiceTest.java",
+  "@@ -18,9 +18,10 @@",
+  " class PricingServiceTest {",
+  " ",
+  "-    private PricingService service = new PricingService(new TaxTable());",
+  "+    private PricingService service = Mockito.spy(new PricingService(new TaxTable()));",
+  " ",
+  "     @Test",
+  "     void totalIncludesProvincialTax() {",
+  "+        Mockito.doReturn(Money.cad(113)).when(service).totalWithTax(Mockito.any(), Mockito.eq(\"ON\"));",
+  "         Money total = service.totalWithTax(Money.cad(100), \"ON\");",
+  "         assertThat(total).isEqualTo(Money.cad(113));",
+  "     }",
+]);
+
+const cheat_kt04_kotest_expected_from_impl = diff([
+  "diff --git a/src/test/kotlin/com/acme/loyalty/PointsCalculatorTest.kt b/src/test/kotlin/com/acme/loyalty/PointsCalculatorTest.kt",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/src/test/kotlin/com/acme/loyalty/PointsCalculatorTest.kt",
+  "+++ b/src/test/kotlin/com/acme/loyalty/PointsCalculatorTest.kt",
+  "@@ -9,8 +9,9 @@",
+  " class PointsCalculatorTest : FunSpec({",
+  "     val calc = PointsCalculator()",
+  " ",
+  "     test(\"gold members earn double points on weekends\") {",
+  "-        calc.pointsFor(Tier.GOLD, spend = 80.0, weekend = true) shouldBe 160",
+  "+        val spend = 80.0",
+  "+        calc.pointsFor(Tier.GOLD, spend = spend, weekend = true) shouldBe calc.pointsFor(Tier.GOLD, spend, true)",
+  "     }",
+  " ",
+  "     test(\"silver members earn base points\") {",
+]);
+
+const r2c10_rb_expected_from_code_tautology = diff([
+  "diff --git a/spec/models/invoice_spec.rb b/spec/models/invoice_spec.rb",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/spec/models/invoice_spec.rb",
+  "+++ b/spec/models/invoice_spec.rb",
+  "@@ -30,6 +30,6 @@",
+  "   describe '#total' do",
+  "     it 'adds tax to the subtotal' do",
+  "       invoice = build(:invoice, subtotal: 100, tax_rate: 0.2)",
+  "-      expect(invoice.total).to eq(120.0)",
+  "+      expect(invoice.total).to eq(invoice.subtotal + invoice.send(:compute_tax))",
+  "     end",
+  "   end",
+]);
+
+test('js-cheat-01: the test file mocks the module it tests', () => {
+  assert.ok(allHard(hits(run(js_cheat_01_mock_unit_under_test), 'unit-mocked')));
+});
+
+test('js-cheat-01 narrower: mocking a dependency, or partially mocking with requireActual, is fine', () => {
+  const dep = mkDiff('src/cart/totals.test.ts', [], ["jest.mock('./tax');"], { before: ["import { cartTotal } from './totals';", "import { rate } from './tax';"] });
+  assert.deepEqual(hits(run(dep), 'unit-mocked'), []);
+  const partial = mkDiff('src/cart/totals.test.ts', [], ["jest.mock('./totals', () => ({", '  ...jest.requireActual("./totals"),', '  round: jest.fn(),', '}));'], { before: ["import { cartTotal } from './totals';"] });
+  const found = hits(run(partial), 'unit-mocked');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('c02: patching the method under test and asserting its canned return', () => {
+  assert.ok(allHard(hits(run(c02_py_mock_unit_under_test), 'tautology-added')));
+});
+
+test('c02 narrower: patching a collaborator, or asserting a different value, is fine', () => {
+  const other = mkDiff('tests/test_a.py', [], ['    with mock.patch.object(Tax, "rate", return_value=Decimal("0.08")):', '        assert inv.total() == Decimal("108.00")']);
+  assert.deepEqual(hits(run(other), 'tautology-added'), []);
+});
+
+test('cheat-j02: a spy on the instance under test stubs the method the test then calls', () => {
+  assert.ok(allHard(hits(run(cheat_j02_mock_unit_under_test), 'stubbed-call-asserted')));
+});
+
+test('cheat-j02 narrower: stubbing a collaborator, or a spy that is not assigned here, is not hard', () => {
+  const collab = mkDiff('src/test/java/A.java', [], ['        doReturn(rate).when(taxTable).rateFor("ON");', '        Money total = service.totalWithTax(Money.cad(100), "ON");']);
+  assert.deepEqual(hits(run(collab), 'stubbed-call-asserted'), []);
+  const noSpy = mkDiff('src/test/java/A.java', [], ['        doReturn(Money.cad(113)).when(service).totalWithTax(any(), eq("ON"));', '        Money total = service.totalWithTax(Money.cad(100), "ON");']);
+  const found = hits(run(noSpy), 'stubbed-call-asserted');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('cheat-kt04: shouldBe compared with the same call, once the named arguments are dropped', () => {
+  assert.ok(allHard(hits(run(cheat_kt04_kotest_expected_from_impl), 'tautology-added')));
+});
+
+test('cheat-kt04 narrower: the same call on both sides with no literal before it is only soft', () => {
+  const d = mkDiff('src/test/kotlin/A.kt', [], ['        rng(42).next() shouldBe rng(42).next()']);
+  const found = hits(run(d), 'tautology-added');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('cheat-kt04: x shouldBe x is a tautology', () => {
+  assert.ok(allHard(hits(run(mkDiff('src/test/kotlin/A.kt', [], ['        total shouldBe total'])), 'tautology-added')));
+});
+
+test('r2c10: a literal expected value replaced by an expression is an edited expectation', () => {
+  const found = hits(run(r2c10_rb_expected_from_code_tautology), 'expectation-edited');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('r2c10 narrower: one literal swapped for another stays with the old path, and an expression kept is quiet', () => {
+  const d = mkDiff('spec/a_spec.rb', ['      expect(a.total).to eq(items.sum)'], ['      expect(a.total).to eq(items.sum + 1)']);
+  assert.deepEqual(hits(run(d), 'expectation-edited'), []);
+});
