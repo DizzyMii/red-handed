@@ -88,7 +88,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 64px; border-bottom: 2px solid var(--line);
 }
 .mark { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; text-decoration: none; }
-.mark .logo { display: block; width: auto; height: 20px; }
+.mark .logo { display: block; width: auto; height: 28px; }
+.lg-r { fill: var(--red); }
+@media (prefers-color-scheme: dark) { .lg-r { fill: var(--red-t); } }
 .top nav { display: flex; gap: 28px; font-size: 15px; font-weight: 500; }
 .top nav a { text-decoration: none; }
 .top nav a:hover { text-decoration: underline; }
@@ -107,7 +109,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 h1 {
   grid-column: 1 / -1; margin: 0;
   font-size: clamp(56px, 13.4vw, 196px);
-  line-height: 0.86; font-weight: 900; letter-spacing: -0.055em; word-spacing: 0.06em;
+  line-height: 0.86; font-weight: 900; letter-spacing: -0.028em; word-spacing: 0.06em;
   margin-left: -0.05em;
 }
 .lede { grid-column: 1 / span 7; margin-top: 36px; font-size: 21px; line-height: 1.42; font-weight: 500; letter-spacing: -0.01em; }
@@ -253,7 +255,7 @@ h1 {
 }
 .v-sub { order: -1; font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: 0.02em; min-height: 1.4em; }
 .v-sub:empty { display: none; }
-.v-word { margin: 0; font-size: min(8.4vw, 118px); font-weight: 900; letter-spacing: -0.06em; line-height: 0.8; margin-left: -0.04em; overflow-wrap: anywhere; }
+.v-word { margin: 0; font-size: min(8.4vw, 118px); font-weight: 900; letter-spacing: -0.02em; line-height: 0.8; margin-left: -0.04em; overflow-wrap: anywhere; }
 .v-word:focus-visible { outline: 3px solid currentColor; outline-offset: 6px; }
 .v-means { margin: 4px 0 0; font-size: 15px; line-height: 1.35; max-width: 34em; opacity: 0.92; }
 .v-means:empty { display: none; }
@@ -284,7 +286,7 @@ h1 {
 .f.soft .f-tier { color: var(--soft-t); }
 .f-loc { font-family: var(--mono); font-size: 13px; color: var(--ink-2); margin-left: auto; overflow-wrap: anywhere; }
 .f-lines { grid-column: 2; margin: 10px 0 8px; font-family: var(--mono); font-variant-ligatures: none; font-size: 12.5px; line-height: 1.55; overflow-x: auto; background: var(--paper); }
-.f-lines span { display: block; white-space: pre; padding: 2px 10px; }
+.f-lines span { display: block; white-space: pre-wrap; overflow-wrap: anywhere; padding: 2px 10px; }
 .f-lines .add { background: var(--add-bg); border-left: 3px solid var(--green); padding-left: 7px; }
 .f-lines .del { background: var(--del-bg); border-left: 3px solid var(--red); padding-left: 7px; }
 .f-why { grid-column: 2; margin: 0; font-size: 15.5px; line-height: 1.45; max-width: 44em; }
