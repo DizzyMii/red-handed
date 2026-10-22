@@ -1310,6 +1310,23 @@ function comparesReal(t) {
   return false;
 }
 
+// The values a check reads, as written: steps[4].text, kinds(steps), total. Matchers chained off
+// the call (.toBe) and the assertion itself are left out.
+const VALUE_CHAIN = /(?<![.\w$])[A-Za-z_$][\w$]*(?:\s*(?:\.\s*[A-Za-z_$][\w$]*|\[[^\]]*\]|\((?:[^()]|\([^()]*\))*\)))*/g;
+function valuesRead(t) {
+  const s = t.replace(STRING_LITERAL, '""');
+  const open = s.indexOf('(');
+  if (open < 0) return [];
+  return [...s.slice(open + 1).matchAll(VALUE_CHAIN)].map(m => m[0].replace(/\s+/g, ''))
+    .filter(c => !/^(?:true|false|null|undefined|None|True|False|new|typeof|as|string|number)$/.test(c));
+}
+// Whether two checks read a value in common, or one reads a part of what the other reads.
+function sharesValue(a, b) {
+  const xs = valuesRead(a);
+  const within = (x, y) => x === y || (y.startsWith(x) && '.[('.includes(y[x.length]));
+  return valuesRead(b).some(y => xs.some(x => within(x, y) || within(y, x)));
+}
+
 // assertTrue(X.f(a)), expect(f(a)).toBe(true) or assert f(a): a yes or no check on one call to f.
 function predicateCallee(t) {
   let arg = null;
@@ -1825,9 +1842,13 @@ export const RULES = [
             // A new predicate whose body only returns a constant answers nothing.
             const idx = sourceIndex(ctx);
             const checked = changed != null && (comparesReal(w.text) || (callee != null && idx.newlyDeclared(callee) && !idx.constantBody(callee)));
+            // A new check that compares real things and reads none of the values the precise checks
+            // read is a check of something else, not one of them loosened.
+            const elsewhere = !checked && comparesReal(w.text) && !removedStrong.some(r => sharesValue(r.text, w.text));
             add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
               ? `A precise assertion was replaced by a looser one in the same change that ${changed.name ? `removed or renamed ${changed.name} in` : 'edits'} ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
-              : undefined, checked);
+              : elsewhere ? 'A precise assertion was removed, and the looser one added in the same place reads other values. Check the precise one was meant to go.'
+                : undefined, checked || elsewhere);
           }
         }
         // is(503) turned into anyOf(is(503), is(500), is(200)) on the same subject: the set of accepted

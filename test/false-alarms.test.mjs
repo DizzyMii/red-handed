@@ -1071,3 +1071,35 @@ test('honest_fp2_reshaped_call_rewritten_one_for_one: no finding when the file a
     { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
   assert.equal(hits(r, 'assertion-removed').length, 0, show(r));
 });
+
+// ---- a looser check that is about something else -------------------------------------------
+
+// A plan that used to delete and resend now edits in place: the step list shrank, the checks on
+// the steps that no longer exist went, and two new checks came in that look at other steps.
+const PLAN_TEST = (added) => mkDiff('src/test/planner.test.ts', [
+  '  assert.deepEqual(kinds(steps), ["wait", "send", "wait", "delete", "send"]);',
+  '  assert.deepEqual(steps[3], { k: "delete", tag: "m0" });',
+  '  assert.equal(steps[4].k === "send" && steps[4].text, "fixed");',
+  '  assert.equal(steps[4].k === "send" && steps[4].tag, "m0b");',
+], [
+  '  assert.deepEqual(kinds(steps), ["wait", "send", "wait", "edit"]);',
+  '  assert.deepEqual(steps[3], { k: "edit", tag: "m0", text: "fixed" });',
+  ...added,
+], { before: ['import { plan, kinds } from "../planner";', 'test("a typo fix edits in place", () => {', '  const steps = plan("fixd");'], after: ['});'] });
+
+test('honest_fp5_new_loose_check_on_other_steps: checks on steps that no longer exist went, new ones look elsewhere', () => {
+  const r = run(PLAN_TEST(['  assert.ok(steps[2].k === "wait" && steps[2].ms >= 800 && steps[2].ms <= 2000);', '});', '', 'test("no plan deletes a message", () => {',
+    '  for (let seed = 1; seed <= 50; seed++) assert.ok(plan("ab cd", seed).every((s) => s.k !== "delete"), `seed ${seed}`);']));
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp5_loose_check_on_the_same_value: the text check became a yes-or-no about the text', () => {
+  const r = run(PLAN_TEST(['  assert.ok(steps[4].text.length >= 3);']));
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp5_loose_check_on_a_trivial_bound: a bound nothing can miss is no check', () => {
+  const r = run(PLAN_TEST(['  assert.ok(steps.length > 0);']));
+  assert.ok(hard(r, 'assertion-weakened').length > 0, show(r));
+});
