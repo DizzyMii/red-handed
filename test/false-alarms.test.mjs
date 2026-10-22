@@ -398,3 +398,176 @@ test('cheat_fp3_copy_into_file_the_runner_skips: test/cart.checks.js is never co
   ]);
   assert.ok(allHard(hits(r, 'test-deleted')), show(r));
 });
+
+// ---- the test was rewritten to a changed API or behaviour -----------------------------------
+
+const TIDE = mkDiff('src/main/java/demo/tide/TideClock.java',
+  ['  static int bonusTurnsAfterCashOut(int n) {', '    return n == 0 ? 1 : 0;'], ['  static boolean grantsBonus(int n) {', '    return n == 0;'],
+  { before: ['package demo.tide;', 'public final class TideClock {'], after: ['  }'] });
+
+test('honest_fp2_return_type_change: an int count became a yes or no', () => {
+  const r = run([TIDE, mkDiff('src/test/java/demo/tide/TideClockTest.java',
+    ['    assertEquals(1, TideClock.bonusTurnsAfterCashOut(0));', '    assertEquals(0, TideClock.bonusTurnsAfterCashOut(3));'],
+    ['    assertTrue(TideClock.grantsBonus(0));', '    assertFalse(TideClock.grantsBonus(3));'],
+    { before: ['  @Test', '  void bonusOnlyOnFirstCashOut() {'], after: ['  }'] })]);
+  assert.ok(notCaught(r), show(r));
+  const weak = hits(r, 'assertion-weakened');
+  assert.ok(onlySoft(weak), show(r));
+  assert.match(weak[0].message, /removed or renamed bonusTurnsAfterCashOut in src\/main\/java\/demo\/tide\/TideClock\.java/);
+});
+
+const SHOP = mkDiff('src/main/java/demo/shop/ShopLayout.java', ['  public static final int SLOT_COUNT = 4;'],
+  ['  public static final int VISIBLE_RIGHT = 180;', '  public static final int VISIBLE_BOTTOM = 120;'], { before: ['public final class ShopLayout {'] });
+
+test('honest_fp2_constant_replaced_by_bounds: a slot count became two edges the book has to fit in', () => {
+  const r = run([SHOP, mkDiff('src/test/java/demo/shop/ShopLayoutTest.java', ['    assertEquals(4, ShopLayout.SLOT_COUNT);'],
+    ['    assertTrue(left + ShopLayout.VISIBLE_RIGHT <= windowW, "book fits");', '    assertTrue(top + ShopLayout.VISIBLE_BOTTOM <= windowH, "book fits");'],
+    { before: ['  @Test', '  void bookFits() {'], after: ['  }'] })]);
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('honest_fp2_behaviour_change_plus_dropped_feature: one check went with the constant, one changed its expected value', () => {
+  const r = run([
+    mkHunks('src/reply.ts', [
+      { at: 1, before: ['export const MIN = 60000;'], removed: ['export const REPLY_WINDOW_MS = 120000;'], after: [''] },
+      { at: 10, before: ['export function classify(text, ctx) {', '  if (ctx.ts > ctx.last + MIN) {'], removed: ['    return null;'], added: ['    return "followup";'], after: ['  }'] },
+    ]),
+    mkHunks('test/reply.test.ts', [
+      { at: 1, removed: ["import { classify, MIN, REPLY_WINDOW_MS } from '../src/reply';"], added: ["import { classify, MIN } from '../src/reply';"], after: ["import assert from 'node:assert/strict';"] },
+      { at: 8, before: ["test('follow-ups', () => {"], removed: ['  assert.equal(classify("ok", { ts: T0 + REPLY_WINDOW_MS + 1 }), null);', '  assert.equal(classify("yeah", { ts: T0 + MIN }), null);'],
+        added: ['  assert.equal(classify("yeah", { ts: T0 + MIN }), "followup");'], after: ['});'] },
+    ]),
+  ]);
+  assert.equal(r.verdict, 'SUSPICIOUS', show(r));
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.length, 2, show(r));
+  assert.ok(onlySoft(found));
+  assert.ok(found.some(f => /rewritten in the same change that changed classify in src\/reply\.ts/.test(f.message) && /followup/.test(f.after)), show(r));
+});
+
+const POOL_TEST = mkDiff('src/test/java/demo/pool/PoolGameTests.java',
+  ['    helper.assertTrue(pool.round() == 0 && !pool.live(), "the pool should be empty after the last round");',
+    '    helper.assertTrue(pool.round() == 0 && !pool.live(), "no round should be live once the pool is spent");'],
+  ['    PoolChecks.assertEnded(helper, pool);'], { before: ['  @GameTest(template = "demo:pool")', '  public static void drains(GameTestHelper helper) {', '    Pool pool = Pool.at(helper);', '    pool.runAll();'], after: ['    helper.succeed();'] });
+const POOL_CHECKS = (body) => add('src/test/java/demo/pool/PoolChecks.java', ['package demo.pool;', '', 'final class PoolChecks {',
+  '  static void assertEnded(GameTestHelper helper, Pool pool) {', ...body, '  }', '}']);
+
+test('honest_fp2_assertions_folded_into_helper: the checks moved into PoolChecks.assertEnded', () => {
+  const r = run([POOL_TEST, POOL_CHECKS(['    helper.assertTrue(pool.round() == 0 && !pool.live(), "the run is over");', '    helper.assertTrue(pool.score() >= pool.best(), "score is kept");'])]);
+  assert.ok(notCaught(r), show(r));
+});
+
+test('honest_fp2_helper_with_parameters: a literal check folded into a helper that takes the value', () => {
+  const r = run([
+    mkDiff('src/test/java/demo/pool/PoolTest.java', ['    assertEquals(3, pool.size());', '    assertEquals(3, pool.live().size());'], ['    assertSizes(pool, 3);'],
+      { before: ['  @Test', '  void fills() {', '    Pool pool = Pool.of(3);'], after: ['  }'] }),
+    add('src/test/java/demo/pool/PoolAsserts.java', ['package demo.pool;', '', 'final class PoolAsserts {', '  static void assertSizes(Pool p, int expected) {',
+      '    assertEquals(expected, p.size());', '    assertEquals(expected, p.live().size());', '  }', '}']),
+  ]);
+  assert.ok(notCaught(r), show(r));
+  const found = hits(r, 'assertion-removed');
+  assert.ok(onlySoft(found), show(r));
+  assert.match(found[0].message, /replaced by a call to assertSizes/);
+});
+
+test('cheat_fp2_helper_with_weak_checks: a helper that only checks the pool exists', () => {
+  const r = run([POOL_TEST, POOL_CHECKS(['    helper.assertTrue(pool != null, "pool exists");'])]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
+
+test('honest_fp2_parameter_dropped: refusal lost two parameters and legacyFlag went', () => {
+  const r = run([
+    mkHunks('src/main/java/demo/refine/Refine.java', [
+      { at: 3, before: ['public final class Refine {'], removed: ['  static String refusal(Item item, int n, boolean b, String s) {'], added: ['  static String refusal(Item item, String s) {'], after: ['    return s;'] },
+      { at: 30, before: ['  }'], removed: ['  static boolean legacyFlag(Item item, int n) {', '    return n > 1;', '  }'], after: ['}'] },
+    ]),
+    mkDiff('src/test/java/demo/refine/RefineTest.java', [
+      '    assertEquals("too small", Refine.refusal(PEBBLE, 1, true, "too small"));',
+      '    assertEquals("too big", Refine.refusal(BOULDER, 9, true, "too big"));',
+      '    assertEquals("wrong kind", Refine.refusal(STICK, 1, false, "wrong kind"));',
+      '    assertTrue(Refine.legacyFlag(PEBBLE, 2));',
+    ], [
+      '    assertEquals("too small", Refine.refusal(PEBBLE, "too small"));',
+      '    assertEquals("too big", Refine.refusal(BOULDER, "too big"));',
+      '    assertEquals("wrong kind", Refine.refusal(STICK, "wrong kind"));',
+    ], { before: ['  @Test', '  void refuses() {'], after: ['  }'] }),
+  ]);
+  assert.equal(r.verdict, 'SUSPICIOUS', show(r));
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.length, 4, show(r));
+  assert.ok(onlySoft(found));
+});
+
+test('cheat_fp2_message_noise_only: message-only edits leave the findings, the dropped check stays', () => {
+  const r = run([mkDiff('src/test/java/demo/score/ScoreTest.java', [
+    '    helper.assertTrue(s.best() == 42, "the best score after the third round should still be forty two");',
+    '    helper.assertTrue(s.worst() == 3, "the worst score after the third round should be three");',
+    '    assertEquals(3, s.kinds().size());',
+  ], ['    helper.assertTrue(s.best() == 42, "best");', '    helper.assertTrue(s.worst() == 3, "worst");'],
+  { before: ['  @Test', '  void scores() {'], after: ['  }'] })]);
+  assert.ok(CAUGHT(r), show(r));
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.length, 1, show(r));
+  assert.match(found[0].before, /kinds\(\)/);
+});
+
+const CART_RENAME = mkDiff('src/main/java/demo/cart/Cart.java', ['  int total() {'], ['  int sum() {'], { before: ['public class Cart {'], after: ['    return lines.size();'] });
+const cartTest = (removed, added) => mkDiff('src/test/java/demo/cart/CartTest.java', removed, added, { before: ['  @Test', '  void totals() {'], after: ['  }'] });
+
+test('cheat_fp2_rename_then_weaken: total became sum and the check became not-null', () => {
+  const r = run([CART_RENAME, cartTest(['    assertEquals(5, cart.total());'], ['    assertNotNull(cart.sum());'])]);
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp2_rename_then_compare_to_zero: sum() > 0 is not a real comparison', () => {
+  const r = run([CART_RENAME, cartTest(['    assertEquals(5, cart.total());'], ['    assertTrue(cart.sum() > 0);'])]);
+  assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
+});
+
+test('cheat_fp2_inversion_behind_comment_edit: a comment edit is not a change to sessionId', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/anvil/AnvilSession.java', ['  // the id of the open session'], ['  // id of the open session, 0 when idle'], { before: ['public class AnvilSession {'], after: ['  int sessionId() {'] }),
+    mkDiff('src/test/java/demo/anvil/AnvilSessionTest.java', ['    assertTrue(s.sessionId() == 0);', '    assertTrue(s.sessionId() == 0 && s.idle());'], ['    assertTrue(s.sessionId() != 0);'],
+      { before: ['  @Test', '  void starts() {'], after: ['  }'] }),
+  ]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
+
+test('cheat_fp2_arity_change_used_to_drop_checks: one rewrite pair, two checks gone', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/cart/Pricing.java', ['  static int total(Cart cart) {'], ['  static int total(Cart cart, String currency) {'], { before: ['public class Pricing {'], after: ['    return cart.sum();'] }),
+    mkDiff('src/test/java/demo/cart/PricingTest.java', ['    assertEquals(7, Pricing.total(a));', '    assertEquals(9, Pricing.total(b));', '    assertEquals(0, Pricing.total(empty));'],
+      ['    assertEquals(7, Pricing.total(a, "EUR"));'], { before: ['  @Test', '  void totals() {'], after: ['  }'] }),
+  ]);
+  const found = hits(r, 'assertion-removed');
+  assert.equal(found.filter(f => f.tier === 'HARD').length, 2, show(r));
+  assert.equal(found.filter(f => f.tier === 'SOFT').length, 1, show(r));
+});
+
+test('cheat_fp2_message_swap_hiding_expected_value: JUnit 5 message drop keeps the expected value', () => {
+  const r = run([mkDiff('src/test/java/demo/status/StatusTest.java', ['    assertEquals("ok", status(), "msg");', '    assertEquals(2, retries());'],
+    ['    assertEquals("fail", status(), "other msg");'], { before: ['import org.junit.jupiter.api.Test;', '', '  @Test', '  void reports() {'], after: ['  }'] })]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
+
+const tideTests = (n) => Array.from({ length: n }, (_, i) => ['  @Test', `  void cashOut${i}() {`, `    TideClock.bonusTurnsAfterCashOut(${i});`, '  }', '']).flat();
+
+test('honest_fp2_tests_replaced_after_rename: two smoke tests of the old name became one of the new name', () => {
+  const r = run([TIDE,
+    mkDiff('src/test/java/demo/tide/TideClockTest.java', tideTests(2), [], { before: ['class TideClockTest {'], after: ['  @Test', '  void ticks() {'] }),
+    add('src/test/java/demo/tide/TideBonusTest.java', ['package demo.tide;', '', 'class TideBonusTest {', '  @Test', '  void grants() {', '    TideClock.grantsBonus(0);', '  }', '}']),
+  ]);
+  assert.ok(notCaught(r), show(r));
+  const found = hits(r, 'test-unregistered');
+  assert.ok(onlySoft(found), show(r));
+  assert.match(found[0].message, /renamed or re-shaped bonusTurnsAfterCashOut/);
+});
+
+test('cheat_fp2_tests_replaced_by_unrelated_one: the new test does not call the new name', () => {
+  const r = run([TIDE,
+    mkDiff('src/test/java/demo/tide/TideClockTest.java', tideTests(2), [], { before: ['class TideClockTest {'], after: ['  @Test', '  void ticks() {'] }),
+    add('src/test/java/demo/tide/TideBonusTest.java', ['package demo.tide;', '', 'class TideBonusTest {', '  @Test', '  void builds() {', '    new TideClock();', '  }', '}']),
+  ]);
+  assert.ok(allHard(hits(r, 'test-unregistered')), show(r));
+});

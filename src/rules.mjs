@@ -4,7 +4,9 @@
 import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
-import { splitTop, moveKey, sourceIndex, testContext, modKey, removedWithFeature } from './symbols.mjs';
+import {
+  splitTop, closeOf, moveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature,
+} from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
 export function clip(s) {
@@ -1030,6 +1032,195 @@ function moveCoverage(ctx) {
   return out;
 }
 
+// ---- rewrites: a check changed in the change that changed the code it calls -----------------
+
+const escapeName = (s) => s.replace(/\$/g, '\\$');
+
+// Expected values and the direction of a check flattened, so a line that only flipped or re-pinned
+// what it expects matches its old self.
+function flattenCheck(t) {
+  return skeleton(t)
+    .replace(/===|!==|==|!=|<=|>=|(?<![-=])>|</g, ' CMP ')
+    .replace(/!(?=[\w$(])/g, '')
+    .replace(/\b(null|undefined|None|nil|true|false|True|False|S|N)\b/g, 'L')
+    .replace(/\bassert(True|False)\b/g, 'assertBool')
+    .replace(/\bassert(Null|NotNull)\b/g, 'assertNullity')
+    .replace(/\.not\.(toBe|toEqual)\b/g, '.$1')
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Every call to name with its arguments dropped: f(a, b) reads f().
+function dropArgs(t, name) {
+  const re = new RegExp(`(?<![\\w$])${escapeName(name)}\\s*\\(`, 'g');
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(t))) {
+    const open = m.index + m[0].length - 1;
+    const close = closeOf(t, open);
+    if (close < 0) break;
+    out += t.slice(last, open + 1) + ')';
+    last = close + 1;
+    re.lastIndex = close + 1;
+  }
+  return out + t.slice(last);
+}
+
+// The ref that makes removed line x and added line y one check rewritten: equal once the calls
+// whose arity changed lose their arguments and renamed names take the new name, or equal up to
+// the expected value when the change edits code the line calls. Null when there is none.
+function rewriteRef(idx, refs, x, y) {
+  let why = null;
+  for (const q of refs) {
+    if (q.status === 'arity') { x = dropArgs(x, q.name); y = dropArgs(y, q.name); why ??= q; }
+    if (q.status === 'renamed') { x = x.replace(new RegExp(`(?<![\\w$])${escapeName(q.name)}(?![\\w$])`, 'g'), q.to); why ??= q; }
+  }
+  if (why && x === y) return why;
+  const changed = refs.find(q => q.status === 'renamed' || q.status === 'arity'
+    || (q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where)));
+  return changed && flattenCheck(x) === flattenCheck(y) ? changed : null;
+}
+
+// Pairs removed with added assertions of one file, one to one, nearest line first. `same` are
+// pairs that differ only in the failure message: the check itself is unchanged, so neither side
+// is a finding. `pairs` are rewrites, reported SOFT.
+function pairRewrites(ctx, f, removed, added) {
+  const jupiter = testContext(f).jupiter;
+  const msgless = (t) => collapse(dropMessage(t, { jupiter }));
+  const free = new Set(added);
+  const nearest = (r) => [...free].sort((x, y) => Math.abs(x.line - r.line) - Math.abs(y.line - r.line));
+  const same = new Set();
+  for (const r of removed) {
+    const a = nearest(r).find(x => msgless(x.text) === msgless(r.text));
+    if (a) { free.delete(a); same.add(r); }
+  }
+  const idx = sourceIndex(ctx);
+  const pairs = new Map();
+  for (const r of removed) {
+    if (same.has(r)) continue;
+    const refs = subjectRefs(ctx, f, r.text);
+    if (!refs.length) continue;
+    for (const a of nearest(r)) {
+      const ref = rewriteRef(idx, refs, msgless(r.text), msgless(a.text));
+      if (ref) { free.delete(a); pairs.set(r, { a, ref }); break; }
+    }
+  }
+  return { same, pairs, addedLeft: [...free] };
+}
+
+const TRIVIAL_OPERAND = /^(-?[01](\.0+)?[fFdDlL]?|null|None|undefined|nil|""|''|true|false|True|False)$/;
+// A comparison whose two sides are both something real: "x <= windowW" is, "x > 0" and "x != null" are not.
+function comparesReal(t) {
+  for (const m of t.matchAll(/===|!==|==|!=|<=|>=|(?<![-=<])>(?![>=])|<(?![<=])/g)) {
+    let depth = 0;
+    let i = m.index - 1;
+    for (; i >= 0; i--) {
+      const c = t[i];
+      if (')]}'.includes(c)) depth++;
+      else if ('([{'.includes(c)) { if (depth === 0) break; depth--; }
+      else if (c === ',' && depth === 0) break;
+    }
+    const left = t.slice(i + 1, m.index).split(/&&|\|\|/).pop().trim();
+    const right = argUpToClose(t.slice(m.index + m[0].length)).split(/&&|\|\|/)[0].trim();
+    if (left && right && !TRIVIAL_OPERAND.test(left) && !TRIVIAL_OPERAND.test(right)) return true;
+  }
+  for (const m of t.matchAll(/[\w$)\]]\s*\.(?:equals|contains)\s*\(/g)) {
+    const arg = argUpToClose(t.slice(m.index + m[0].length));
+    if (arg && !TRIVIAL_OPERAND.test(arg)) return true;
+  }
+  return false;
+}
+
+// assertTrue(X.f(a)), expect(f(a)).toBe(true) or assert f(a): a yes or no check on one call to f.
+function predicateCallee(t) {
+  let arg = null;
+  const at = /\bassert(?:True|False)\s*\(/.exec(t) ?? /\bexpect\s*\((?=.*\)\s*\.(?:not\.)?toBe\s*\(\s*(?:true|false)\s*\))/.exec(t);
+  if (at) {
+    const open = at.index + at[0].length - 1;
+    const close = closeOf(t, open);
+    if (close > 0) arg = splitTop(t.slice(open + 1, close))[0].trim();
+  } else {
+    arg = /^\s*assert\s+(.+?)\s*(?:,.*)?$/.exec(t)?.[1] ?? null;
+  }
+  const call = arg && /^(?:[\w$]+\.)*([\w$]+)\s*\(/.exec(arg);
+  if (!call || closeOf(arg, call[0].length - 1) !== arg.length - 1) return null;
+  return call[1];
+}
+
+// A helper parameter's name: "Pool p" and "p: Pool" and "p=None" all give p.
+const paramName = (p) => {
+  const s = p.split('=')[0].trim();
+  return s.includes(':') ? s.split(':')[0].trim() : s.split(/\s+/).pop();
+};
+// A helper check that is worth something: not a tautology, not a null check, not a bare truthy one.
+const solidCheck = (t) => isAssertLine(t) && !TAUTOLOGY.some(re => re.test(t))
+  && !/!=\s*null\b|\bassertNotNull\b|\bisNotNull\b|\btoBeDefined\b/.test(t) && (!WEAK.test(t) || comparesReal(t));
+
+// The checks in the body of helper `name` that this change adds to another test file.
+function helperChecks(ctx, f, name) {
+  const out = [];
+  for (const g of ctx.files) {
+    if (g === f || g.newPath == null || !ctx.isTest(g.newPath)) continue;
+    const lang = language(g.newPath);
+    for (const a of g.added) {
+      if (!declarationsOn(a.text, lang).some(d => d.kind === 'fn' && d.name === name)) continue;
+      const pm = new RegExp(`${escapeName(name)}\\s*\\(([^)]*)\\)`).exec(a.text);
+      const params = pm && pm[1].trim() ? splitTop(pm[1]).map(paramName) : [];
+      const { lines, i } = newSide(g, a);
+      if (i < 0) continue;
+      for (const l of blockBelow(lines, i).body) if (l.kind === '+' && solidCheck(l.text)) out.push({ l, params });
+    }
+  }
+  return out;
+}
+
+// Removed checks that now sit in a helper the same hunk calls: each one equals a helper check once
+// the helper's parameters are read as the call's arguments. One helper check backs one removed line.
+function helperPairs(ctx, f, removed) {
+  const out = new Map();
+  const used = new Set();
+  for (const r of removed) {
+    const added = (f.hunks[r.hunk]?.lines ?? []).filter(l => l.kind === '+' && !isCommentLine(l.text));
+    for (const l of added) {
+      for (const m of l.text.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+        const close = closeOf(l.text, m.index + m[0].length - 1);
+        if (close < 0) continue;
+        const inner = l.text.slice(m.index + m[0].length, close);
+        const args = inner.trim() ? splitTop(inner).map(s => s.trim()) : [];
+        const hit = helperChecks(ctx, f, m[1]).find(({ l: b, params }) => {
+          if (used.has(b) || params.length !== args.length) return false;
+          let text = b.text;
+          params.forEach((p, k) => { text = text.replace(new RegExp(`(?<![\\w$.])${escapeName(p)}(?![\\w$])`, 'g'), args[k]); });
+          return flattenCheck(dropMessage(text)) === flattenCheck(dropMessage(r.text));
+        });
+        if (hit) { used.add(hit.l); out.set(r, m[1]); break; }
+      }
+      if (out.has(r)) break;
+    }
+  }
+  return out;
+}
+
+// A removed test whose code was renamed or re-shaped, when some test this change adds calls the new
+// shape. The first changed ref, or null.
+function reshapedTo(ctx, f, block, isHeader) {
+  const refs = block.flatMap(t => subjectRefs(ctx, f, t));
+  if (!refs.length || !refs.every(q => q.status === 'renamed' || q.status === 'arity')) return null;
+  const names = refs.map(q => (q.status === 'renamed' ? q.to : q.name));
+  const calls = new RegExp(`(?<![\\w$])(${names.map(escapeName).join('|')})\\s*\\(`);
+  for (const g of ctx.files) {
+    for (const h of g.hunks) {
+      let inNew = false;
+      for (const l of h.lines) {
+        if (l.kind === '-') continue;
+        if (isHeader(l.text)) inNew = l.kind === '+';
+        else if (inNew && l.kind === '+' && calls.test(l.text)) return refs[0];
+      }
+    }
+  }
+  return null;
+}
+
 const TEST_DELETED_WHY = 'A test file was deleted, so whatever it checked is no longer checked.';
 
 // ---- the rules, in spec order ---------------------------------------------------------------
@@ -1223,14 +1414,25 @@ export const RULES = [
         if (!gone) { removed.push(r); continue; }
         add(pathOf(f), r.line, r.text, null, `This assertion was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
       }
+      // A check rewritten to the code's new shape pairs with its new form and drops out of the count.
+      // An honest API change and a test bent to fit a bug look the same, so the pair stays as SOFT.
       const added = scope.added.filter(a => isAssertLine(a.text));
-      if (removed.length > added.length) {
+      const { same, pairs, addedLeft } = pairRewrites(ctx, f, removed, added);
+      for (const [r, { a, ref }] of pairs) {
+        add(pathOf(f), r.line, r.text, a.text, `This assertion was rewritten in the same change that changed ${ref.name} in ${ref.file}. That is how an honest API change looks, and also how a test gets bent to fit a bug, so red-handed flags it for review instead of failing it.`, true);
+      }
+      const helped = helperPairs(ctx, f, removed.filter(r => !same.has(r) && !pairs.has(r)));
+      for (const [r, name] of helped) {
+        add(pathOf(f), r.line, r.text, null, `This assertion was replaced by a call to ${name}, which this change adds with matching checks. Check the helper asserts what the old line did.`, true);
+      }
+      const unpaired = removed.filter(r => !same.has(r) && !pairs.has(r) && !helped.has(r));
+      if (unpaired.length > addedLeft.length) {
         // Several literal asserts folded into a table or a parameterized test look like removals.
         const table = scope.added.some(a => !isCommentLine(a.text) && TABLE.test(a.text));
         // Field asserts on one object folded into a comparison of that whole object are not lost either.
         const whole = wholeObjectSubjects(f, scope.added);
-        const folded = whole.length > 0 && removed.every(r => whole.some(s => new RegExp(`\\b${s.replace(/[.$]/g, '\\$&')}\\s*\\.\\s*\\w`).test(r.text)));
-        for (const r of removed.slice(0, 10)) add(pathOf(f), r.line, r.text, null, undefined, table || folded);
+        const folded = whole.length > 0 && unpaired.every(r => whole.some(s => new RegExp(`\\b${s.replace(/[.$]/g, '\\$&')}\\s*\\.\\s*\\w`).test(r.text)));
+        for (const r of unpaired.slice(0, 10)) add(pathOf(f), r.line, r.text, null, undefined, table || folded);
       }
     }
   }),
@@ -1249,7 +1451,17 @@ export const RULES = [
         const addedStrong = code('+').filter(l => STRONG.test(l.text) && !WEAK.test(l.text));
         const addedWeak = code('+').filter(l => WEAK.test(l.text));
         if (removedStrong.length > addedStrong.length) {
-          for (const w of addedWeak) add(pathOf(f), w.newLine, removedStrong[0].text, w.text);
+          // The precise check called code this change removed, renamed or re-shaped. A looser check that
+          // still compares two real things, or asks a yes or no of a function the change adds, is how such
+          // a rewrite often looks; anything looser than that stays a fail.
+          const changed = removedStrong.map(l => subjectRefs(ctx, f, l.text).find(q => q.status === 'gone' || q.status === 'renamed' || q.status === 'arity')).find(Boolean);
+          for (const w of addedWeak) {
+            const callee = changed && predicateCallee(w.text);
+            const checked = changed != null && (comparesReal(w.text) || (callee != null && sourceIndex(ctx).newlyDeclared(callee)));
+            add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
+              ? `A precise assertion was replaced by a looser one in the same change that removed or renamed ${changed.name} in ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
+              : undefined, checked);
+          }
         }
         // is(503) turned into anyOf(is(503), is(500), is(200)) on the same subject: the set of accepted
         // values grew. Honest widening exists too, so soft.
@@ -1517,8 +1729,11 @@ export const RULES = [
       if (removedH.length <= addedH) continue;
       // Two tests merged into one also lose a header, so a file that adds one is only a SOFT finding.
       for (const r of removedH.slice(0, 10)) {
-        const gone = removedWithFeature(ctx, f, removedBlock(f, r, header));
+        const block = removedBlock(f, r, header);
+        const gone = removedWithFeature(ctx, f, block);
+        const reshaped = !gone && reshapedTo(ctx, f, block, header);
         if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+        else if (reshaped) add(pathOf(f), r.line, r.text, null, `A test was replaced in the same change that renamed or re-shaped ${reshaped.name} in ${reshaped.file}. Check the new test covers what the old one did.`, true);
         else add(pathOf(f), r.line, r.text, null, undefined, addedH > 0);
       }
     }
