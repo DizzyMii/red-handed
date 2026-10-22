@@ -424,6 +424,25 @@ function removedBlock(f, r, isHeader) {
   return out;
 }
 
+// The removed lines of the test that removed line r sits in, when that test was removed whole:
+// its header and every line from there down to r are removed lines. Null otherwise.
+function wholeTestAround(f, r) {
+  const lines = f.hunks[r.hunk]?.lines ?? [];
+  const at = lines.findIndex(l => l.kind === '-' && l.oldLine === r.line);
+  for (let j = at - 1; j >= 0; j--) {
+    if (lines[j].kind !== '-') return null;
+    if (!isCommentLine(lines[j].text) && TEST_HEADER.test(lines[j].text)) {
+      const block = [];
+      for (let k = j; k < lines.length && lines[k].kind === '-'; k++) {
+        if (k > j && TEST_HEADER.test(lines[k].text)) break;
+        block.push(lines[k].text);
+      }
+      return block;
+    }
+  }
+  return null;
+}
+
 // The lines of `f` the assertion rules may judge: all of them in a test file, and in a Rust source
 // file only the hunks that sit next to #[test] or #[cfg(test)]. Null when none.
 function testScope(ctx, f) {
@@ -1596,7 +1615,10 @@ export const RULES = [
       // dressed as a removal looks like, so it stays on the page as SOFT and out of the count.
       const removed = [];
       for (const r of lost) {
-        const gone = removedWithFeature(ctx, f, [r.text]);
+        // In a test removed whole, the lines around the check count too: a loop over what the
+        // removed call returned, or a local set from it.
+        const block = wholeTestAround(f, r);
+        const gone = (block && removedWithFeature(ctx, f, block)) || removedWithFeature(ctx, f, [r.text]);
         if (!gone) { removed.push(r); continue; }
         add(pathOf(f), r.line, r.text, null, `This assertion was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
       }

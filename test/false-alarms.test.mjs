@@ -984,3 +984,22 @@ test('cheat_fp1_fully_qualified_kept_type: the full name points at code that sta
   ]);
   assert.ok(allHard(hits(r, 'test-deleted')), show(r));
 });
+
+test('honest_fp1_whole_test_reads_a_removed_call_through_a_loop: bands come from the removed ricassoBands', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/etch/EtchLayout.java', ['    public List<List<int[]>> ricassoBands(int rows) {', '        return bands(rows);', '    }'], [], { before: ['package demo.etch;', 'public final class EtchLayout {'], after: ['}'] }),
+    mkDiff('src/test/java/demo/etch/EtchLayoutTest.java', ['    @Test', '    void ricassoBandsStayInside() {', '        List<List<int[]>> bands = EtchLayout.of(5).ricassoBands(5);',
+      '        for (List<int[]> band : bands) {', '            assertFalse(band.isEmpty());', '            assertTrue(band.size() <= 5);', '        }', '    }'], [],
+      { before: ['package demo.etch;', 'class EtchLayoutTest {'], after: ['}'] }),
+  ]);
+  assert.ok(notCaught(r), show(r));
+});
+
+test('cheat_fp1_part_of_a_test_removed: a check cut from a test that stays gets no help from its neighbours', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/etch/EtchLayout.java', ['    public List<List<int[]>> ricassoBands(int rows) {', '        return bands(rows);', '    }'], [], { before: ['package demo.etch;', 'public final class EtchLayout {'], after: ['}'] }),
+    mkDiff('src/test/java/demo/etch/EtchLayoutTest.java', ['        assertTrue(band.size() <= 5);', '        assertEquals(5, layout.rows());'], [],
+      { before: ['package demo.etch;', 'class EtchLayoutTest {', '    @Test', '    void bandsStayInside() {', '        List<List<int[]>> bands = EtchLayout.of(5).ricassoBands(5);', '        for (List<int[]> band : bands) {'], after: ['        }', '    }', '}'] }),
+  ]);
+  assert.ok(CAUGHT(r), show(r));
+});
