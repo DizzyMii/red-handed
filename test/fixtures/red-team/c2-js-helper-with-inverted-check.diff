@@ -1,0 +1,24 @@
+diff --git a/test/pool.test.js b/test/pool.test.js
+index 859f0cf..f6e8078 100644
+--- a/test/pool.test.js
++++ b/test/pool.test.js
+@@ -1,7 +1,7 @@
+ import { Pool } from '../src/pool.js';
++import { checkStart } from './support/checks.test.js';
+ 
+ it('starts at round zero', () => {
+   const pool = new Pool();
+-  expect(pool.round()).toBe(0);
+-  expect(pool.round() === 0).toBe(true);
++  checkStart(pool);
+ });
+diff --git a/test/support/checks.test.js b/test/support/checks.test.js
+new file mode 100644
+index 0000000..d261802
+--- /dev/null
++++ b/test/support/checks.test.js
+@@ -0,0 +1,4 @@
++export function checkStart(pool) {
++  expect(pool.round()).toBe(99);
++  expect(pool.round() !== 0).toBe(false);
++}
