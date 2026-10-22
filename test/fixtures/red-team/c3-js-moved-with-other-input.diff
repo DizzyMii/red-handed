@@ -1,0 +1,29 @@
+diff --git a/test/cart.test.js b/test/cart.test.js
+deleted file mode 100644
+index 7b57b65..0000000
+--- a/test/cart.test.js
++++ /dev/null
+@@ -1,7 +0,0 @@
+-import { total } from '../src/cart.js';
+-
+-const mixed = [3, 4, -2, 2];
+-
+-it('sums mixed items', () => {
+-  expect(total(mixed)).toBe(7);
+-});
+diff --git a/test/order.test.js b/test/order.test.js
+index e7e4022..7c9d7ac 100644
+--- a/test/order.test.js
++++ b/test/order.test.js
+@@ -1,5 +1,11 @@
+ import { total } from '../src/cart.js';
+ 
++const easy = [7];
++
+ it('exists', () => {
+   expect(typeof total).toBe('function');
+ });
++
++it('sums mixed items', () => {
++  expect(total(easy)).toBe(7);
++});

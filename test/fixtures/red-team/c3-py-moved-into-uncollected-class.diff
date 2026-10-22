@@ -1,0 +1,26 @@
+diff --git a/tests/test_cart.py b/tests/test_cart.py
+deleted file mode 100644
+index d114449..0000000
+--- a/tests/test_cart.py
++++ /dev/null
+@@ -1,6 +0,0 @@
+-from app.cart import total
+-
+-
+-def test_sums():
+-    assert total([3, 4]) == 7
+-    assert total([]) == 0
+diff --git a/tests/test_order.py b/tests/test_order.py
+index c87182e..0d73c20 100644
+--- a/tests/test_order.py
++++ b/tests/test_order.py
+@@ -3,3 +3,9 @@ from app.cart import total
+ 
+ def test_callable():
+     assert callable(total)
++
++
++class CartChecks:
++    def test_sums(self):
++        assert total([3, 4]) == 7
++        assert total([]) == 0

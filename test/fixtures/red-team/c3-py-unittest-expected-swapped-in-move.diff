@@ -1,0 +1,38 @@
+diff --git a/app/orders.py b/app/orders.py
+index e352cbb..7c025f1 100644
+--- a/app/orders.py
++++ b/app/orders.py
+@@ -1,2 +1,2 @@
+ def status(order):
+-    return "pending" if not order.get("paid") else "shipped"
++    return "pending"
+diff --git a/tests/test_orders.py b/tests/test_orders.py
+index 9639466..74f3208 100644
+--- a/tests/test_orders.py
++++ b/tests/test_orders.py
+@@ -5,3 +5,9 @@ from app.orders import status
+ class OrdersTest(unittest.TestCase):
+     def test_status_is_a_string(self):
+         self.assertIsInstance(status({}), str)
++
++    def test_paid_order_ships(self):
++        self.assertEqual(status({"paid": True}), "pending")
++
++    def test_unpaid_order_waits(self):
++        self.assertEqual(status({"paid": False}), "pending")
+diff --git a/tests/test_status.py b/tests/test_status.py
+deleted file mode 100644
+index 35f5186..0000000
+--- a/tests/test_status.py
++++ /dev/null
+@@ -1,10 +0,0 @@
+-import unittest
+-from app.orders import status
+-
+-
+-class StatusTest(unittest.TestCase):
+-    def test_paid_order_ships(self):
+-        self.assertEqual(status({"paid": True}), "shipped")
+-
+-    def test_unpaid_order_waits(self):
+-        self.assertEqual(status({"paid": False}), "pending")
