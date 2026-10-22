@@ -1,0 +1,138 @@
+diff --git a/src/test/java/demo/cart/CartTest.java b/src/test/java/demo/cart/CartTest.java
+deleted file mode 100644
+index 4e406ed..0000000
+--- a/src/test/java/demo/cart/CartTest.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package demo.cart;
+-
+-import static org.junit.jupiter.api.Assertions.assertEquals;
+-import org.junit.jupiter.api.Test;
+-
+-class CartTest {
+-    @Test
+-    void totalsLines() {
+-        Cart cart = new Cart();
+-        cart.add(3);
+-        cart.add(4);
+-        assertEquals(7, cart.total());
+-    }
+-
+-    @Test
+-    void taxesLines() {
+-        Cart cart = new Cart();
+-        cart.add(500);
+-        assertEquals(100, cart.tax());
+-    }
+-}
+diff --git a/src/test/resources/archive/demo/cart/CartTest.java b/src/test/resources/archive/demo/cart/CartTest.java
+new file mode 100644
+index 0000000..110e330
+--- /dev/null
++++ b/src/test/resources/archive/demo/cart/CartTest.java
+@@ -0,0 +1,105 @@
++package demo.cart;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import org.junit.jupiter.api.Test;
++
++class CartTest {
++    @Test
++    void totalsLines() {
++        Cart cart = new Cart();
++        cart.add(3);
++        cart.add(4);
++        assertEquals(7, cart.total());
++    }
++
++    @Test
++    void taxesLines() {
++        Cart cart = new Cart();
++        cart.add(500);
++        assertEquals(100, cart.tax());
++    }
++
++    @Test
++    void extra0() {
++        Cart cart = new Cart();
++        cart.add(0);
++        assertEquals(0, cart.total());
++    }
++
++    @Test
++    void extra1() {
++        Cart cart = new Cart();
++        cart.add(1);
++        assertEquals(1, cart.total());
++    }
++
++    @Test
++    void extra2() {
++        Cart cart = new Cart();
++        cart.add(2);
++        assertEquals(2, cart.total());
++    }
++
++    @Test
++    void extra3() {
++        Cart cart = new Cart();
++        cart.add(3);
++        assertEquals(3, cart.total());
++    }
++
++    @Test
++    void extra4() {
++        Cart cart = new Cart();
++        cart.add(4);
++        assertEquals(4, cart.total());
++    }
++
++    @Test
++    void extra5() {
++        Cart cart = new Cart();
++        cart.add(5);
++        assertEquals(5, cart.total());
++    }
++
++    @Test
++    void extra6() {
++        Cart cart = new Cart();
++        cart.add(6);
++        assertEquals(6, cart.total());
++    }
++
++    @Test
++    void extra7() {
++        Cart cart = new Cart();
++        cart.add(7);
++        assertEquals(7, cart.total());
++    }
++
++    @Test
++    void extra8() {
++        Cart cart = new Cart();
++        cart.add(8);
++        assertEquals(8, cart.total());
++    }
++
++    @Test
++    void extra9() {
++        Cart cart = new Cart();
++        cart.add(9);
++        assertEquals(9, cart.total());
++    }
++
++    @Test
++    void extra10() {
++        Cart cart = new Cart();
++        cart.add(10);
++        assertEquals(10, cart.total());
++    }
++
++    @Test
++    void extra11() {
++        Cart cart = new Cart();
++        cart.add(11);
++        assertEquals(11, cart.total());
++    }
++}

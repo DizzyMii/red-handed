@@ -1,0 +1,16 @@
+diff --git a/tests/test_cart.py b/tests/unit/test_cart.py
+similarity index 92%
+rename from tests/test_cart.py
+rename to tests/unit/test_cart.py
+index 27efb14..2309330 100644
+--- a/tests/test_cart.py
++++ b/tests/unit/test_cart.py
+@@ -1,7 +1,7 @@
+ from app.cart import total
+ 
+ 
+-class TestCart:
++class CartCases:
+     def test_sums(self):
+         assert total([3, 4]) == 7
+ 

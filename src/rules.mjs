@@ -1351,6 +1351,11 @@ export const RULES = [
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;
       const gone = f.status === 'deleted' || (f.status === 'renamed' && f.newPath != null && !ctx.isTest(f.newPath));
       if (!gone) {
+        // A jvm test moved under resources is still on a test path, but the build only copies it.
+        if (f.status === 'renamed' && language(f.oldPath) === 'jvm' && !JVM_RESOURCES.test(f.oldPath) && JVM_RESOURCES.test(f.newPath ?? '')) {
+          add(f.oldPath, 0, f.oldPath, f.newPath, 'A test file was moved into a resources folder, which the build copies and never compiles, so it no longer runs.');
+          continue;
+        }
         const out = f.status === 'renamed' && f.newPath != null ? leavesRunnerName(ctx, f) : null;
         if (out) add(f.oldPath, 0, f.oldPath, f.newPath, 'A test file was renamed out of the name its runner looks for, so the runner may no longer find it.', out.softer);
         continue;
@@ -1792,6 +1797,17 @@ export const RULES = [
       ? new RegExp(`^\\s*(${aliases.join('|')})(\\.\\w+)?\\s*\\(\\s*['"\`]`)
       : null;
     const header = (t) => !isCommentLine(t) && (TEST_HEADER.test(t) || (aliasCall?.test(t) ?? false));
+    // pytest collects test functions only inside a class named Test* (or a unittest TestCase). A
+    // class renamed out of that name keeps every def test_ line and silently stops running them.
+    const PY_COLLECTED = /^\s*class\s+(?:Test\w*\s*[(:]|\w+\s*\([^)]*TestCase)/;
+    for (const f of ctx.files) {
+      if (f.status === 'deleted' || f.newPath == null || !ctx.isTest(f.newPath) || language(f.newPath) !== 'py') continue;
+      const lost = f.removed.find(r => PY_COLLECTED.test(r.text));
+      if (!lost || f.added.some(a => PY_COLLECTED.test(a.text))) continue;
+      const renamedTo = f.added.find(a => /^\s*class\s+\w+/.test(a.text));
+      const stillTests = f.hunks.some(h => h.lines.some(l => l.newLine != null && /^\s+(?:async\s+)?def\s+test_/.test(l.text)));
+      if (renamedTo && stillTests) add(f.newPath, renamedTo.line, lost.text, renamedTo.text, 'A pytest class was renamed so its name no longer starts with Test, so pytest stops collecting the tests in it.');
+    }
     const per = [];
     let removedTotal = 0;
     let addedTotal = 0;

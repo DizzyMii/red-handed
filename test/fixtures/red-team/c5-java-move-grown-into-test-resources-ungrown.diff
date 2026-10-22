@@ -1,0 +1,4 @@
+diff --git a/src/test/java/demo/cart/CartTest.java b/src/test/resources/archive/demo/cart/CartTest.java
+similarity index 100%
+rename from src/test/java/demo/cart/CartTest.java
+rename to src/test/resources/archive/demo/cart/CartTest.java
