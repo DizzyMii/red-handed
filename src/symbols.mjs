@@ -106,6 +106,8 @@ export function declarationsOn(text, lang) {
   if (isCommentLine(text)) return [];
   const out = [];
   if (lang === 'jvm' || lang === 'cs') {
+    // Annotations sit anywhere among the modifiers and parameters: "public static @Nullable String f(".
+    text = text.replace(/@[\w$.]+(?:\([^)]*\))?\s*/g, '');
     const t = JVM_TYPE.exec(text);
     if (t) out.push({ name: t[1], kind: 'type', arity: null });
     const k = KOTLIN_FUN.exec(text);
