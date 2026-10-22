@@ -17,7 +17,7 @@ test('action.yml declares the three inputs and a composite run', () => {
 });
 
 test('the scan step has an id because later steps read its output', () => {
-  assert.match(yml, /- id: scan\n/);
+  assert.match(yml, /- id: scan\r?\n/);
   assert.ok(yml.includes('steps.scan.outputs.code'));
 });
 
