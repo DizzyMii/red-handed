@@ -236,6 +236,8 @@ function cargoSection(f, a) {
 
 const HIDE_ATTR = /(\s|^)(-diff|binary|-text)\b/;
 const MEDIA_EXT = /^(png|jpe?g|gif|svg|ico|webp|bmp|woff2?|ttf|otf|eot|mp3|mp4|wav|ogg|webm|mov|avi|pdf)$/i;
+// Archives, compiled output and binary art: marking these binary is housekeeping.
+const BINARY_EXT = /^(jar|war|ear|aar|class|dex|so|dll|dylib|exe|bin|o|a|lib|pyc|wasm|zip|gz|tgz|bz2|xz|7z|rar|tar|jks|keystore|nbt|mca|schem|schematic|psd|xcf|kra|aseprite|ase|blend|fbx|glb)$/i;
 const HIDE_GENERATED =/(\s|^)linguist-(generated|vendored)(=true|(?![=\w-]))/;
 
 const SUPPRESSION = /@ts-(ignore|expect-error|nocheck)\b|eslint-disable|#\s*type:\s*ignore|#\s*noqa\b|#\s*pylint:\s*disable|#\s*pyright:\s*ignore|@SuppressWarnings\s*\(|#\[\s*allow\s*\(|\/\/\s*nolint\b|#pragma\s+warning\s+disable|\/\/\s*@ts-|rubocop:disable|istanbul\s+ignore|c8\s+ignore|pragma:\s*no\s+cover/;
@@ -1325,9 +1327,9 @@ export const RULES = [
     const couldCover = (token) => {
       if (/test|spec/i.test(token)) return true;
       if (token.includes('*')) {
-        // Any glob can cover tests or snapshots, except images, fonts and media that cannot hold either.
+        // Any glob can cover tests or snapshots, except media and binaries that cannot hold either.
         const ext = /\.([A-Za-z0-9]+)$/.exec(token);
-        return !ext || !MEDIA_EXT.test(ext[1]);
+        return !ext || !(MEDIA_EXT.test(ext[1]) || BINARY_EXT.test(ext[1]));
       }
       return language(token) !== 'other';
     };
