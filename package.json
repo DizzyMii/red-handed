@@ -21,6 +21,14 @@
   },
   "license": "MIT",
   "author": "Kade Heglin",
+  "homepage": "https://dizzymii.github.io/red-handed/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DizzyMii/red-handed.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DizzyMii/red-handed/issues"
+  },
   "keywords": [
     "tests",
     "ai-agents",

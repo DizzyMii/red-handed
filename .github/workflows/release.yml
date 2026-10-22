@@ -1,0 +1,31 @@
+# Publishes to npm when a version tag is pushed. Uses npm trusted publishing (OIDC),
+# so there is no NPM_TOKEN secret to rotate. The package's npm settings must list
+# DizzyMii/red-handed with this workflow file as a trusted publisher.
+name: release
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - run: npm test
+      - name: Check the tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm publish --access public
+      - name: Move the major tag the Action snippet uses
+        run: |
+          major="v$(node -p "require('./package.json').version.split('.')[0]")"
+          git tag -f "$major"
+          git push -f origin "$major"
