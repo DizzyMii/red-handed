@@ -126,7 +126,9 @@ export function parseDiff(text, { maxLines = MAX_DIFF_LINES } = {}) {
       const m = HUNK.exec(line);
       if (m && cur) {
         const rec = cur.rec;
-        rec.hunks.push({ oldStart: +m[1], newStart: +m[3], lines: [] });
+        // Git puts the nearest function or class line above the hunk after the second @@.
+        const context = line.slice(m[0].length).replace(/^ /, '').replace(/\s+$/, '');
+        rec.hunks.push({ oldStart: +m[1], newStart: +m[3], lines: [], ...(context ? { context } : {}) });
         hunk = {
           e: cur,
           index: rec.hunks.length - 1,

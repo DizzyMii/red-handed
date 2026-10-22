@@ -5,7 +5,7 @@ import { scan } from '../src/scan.mjs';
 //   mkDiff('src/a.js', [], ['x'], { status: 'added' })
 //   mkDiff('test/a.test.js', [], [], { status: 'deleted', removedBody: [...] })
 export function mkDiff(path, removed = [], added = [], opts = {}) {
-  const { status = 'modified', oldPath = path, before = [], after = [] } = opts;
+  const { status = 'modified', oldPath = path, before = [], after = [], context = '' } = opts;
   const head = [];
   if (status === 'renamed') {
     head.push(`diff --git a/${oldPath} b/${path}`, 'similarity index 90%', `rename from ${oldPath}`, `rename to ${path}`);
@@ -22,7 +22,7 @@ export function mkDiff(path, removed = [], added = [], opts = {}) {
   const b = status === 'deleted' ? '/dev/null' : `b/${path}`;
   const oldStart = status === 'added' ? 0 : 1;
   const newStart = status === 'deleted' ? 0 : 1;
-  return [...head, `--- ${a}`, `+++ ${b}`, `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`, ...body].join('\n') + '\n';
+  return [...head, `--- ${a}`, `+++ ${b}`, `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${context ? ' ' + context : ''}`, ...body].join('\n') + '\n';
 }
 
 export function mkSource(diffText, extra = {}) {

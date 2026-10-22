@@ -101,7 +101,8 @@ const JVM_METHOD = /^\s*(?:@\w+(?:\([^)]*\))?\s+)*([\w$.<>\[\],? ]+?)\s+([A-Za-z
 // Cheap test first: the full pattern backtracks on long lines that cannot be a method header.
 const JVM_METHOD_TAIL = /\)\s*(?:throws\s[^{]*)?\{?\s*$/;
 const KOTLIN_FUN = /\bfun\s+(?:<[^>]+>\s*)?(?:[\w$]+\.)?([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
-const JVM_FIELD = /\b(?:final|const|readonly)\s+[\w$<>\[\],.? ]+?\s+([A-Za-z_$][\w$]*)\s*=/;
+// A final field with or without its value: "final int guides = 1;" and "final int guides;".
+const JVM_FIELD = /\b(?:final|const|readonly)\s+[\w$<>\[\],.? ]+?\s+([A-Za-z_$][\w$]*)\s*(?:=|;\s*$)/;
 const KOTLIN_VAL = /^\s*(?:(?:private|public|internal|protected|const)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/;
 const ENUM_CONSTANT = /^\s*([A-Z][A-Z0-9_]*)\s*(\(.*\))?\s*(\{\s*)?[,;]?\s*$/;
 const JS_FUNCTION = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
@@ -261,6 +262,25 @@ export function sourceIndex(ctx) {
       const inHunk = [];
       hunkDecls.set(h, inHunk);
       types = types.filter(t => t.ind === 0).map(t => ({ ...t, carried: true }));
+      // The function or class git names after the @@ is still there, around the lines of the hunk.
+      // Git cuts that line short, so a parameter list may be open; its arity is then unknown. A
+      // type named there may not be the innermost one, so members below it stay guessed.
+      if (h.context) {
+        const closed = declarationsOn(h.context, lang);
+        const found = closed.length ? closed : declarationsOn(h.context + ')', lang).map(d => ({ ...d, arity: null }));
+        const ind = /^\s*/.exec(h.context)[0].length;
+        while (types.length && types[types.length - 1].ind >= ind) types.pop();
+        for (const d of found) {
+          const decl = { ...d, side: ' ', hunk, rec, top: ind === 0, outer: types[0]?.name ?? stem, fromContext: true,
+            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : (types[types.length - 1]?.name ?? stem)) : rec.mod, ownerGuessed: OVERLOADS.has(lang) && d.kind !== 'type' };
+          decls.push(decl);
+          inHunk.push(decl);
+          if (!byName.has(decl.name)) byName.set(decl.name, []);
+          byName.get(decl.name).push(decl);
+        }
+        const t = OVERLOADS.has(lang) && found.find(d => d.kind === 'type');
+        if (t) types.push({ ind, name: t.name, carried: true });
+      }
       for (const l of h.lines) {
         const found = declarationsOn(l.text, lang);
         if (!found.length) continue;
@@ -358,6 +378,11 @@ export function sourceIndex(ctx) {
     touched(name, where) {
       return named(name).some(d => where(d) && hunkEdits(d.rec.f.hunks[d.hunk]));
     },
+    // The production file a test file mirrors by name and place, when this change edits its code.
+    mirrorEdited(testPath) {
+      const keys = testMirrors(testPath);
+      return records.find(r => keys.has(r.mod) && r.f.status !== 'deleted' && r.f.hunks.some(hunkEdits))?.path ?? null;
+    },
     // Every added declaration of name has a body that only returns a literal (return true;).
     constantBody(name) {
       const added = named(name).filter(d => d.side === '+' && d.kind === 'fn');
@@ -398,6 +423,26 @@ function resolveRelative(fromPath, spec) {
     else if (seg !== '.') parts.push(seg);
   }
   return modKey(parts.join('/'));
+}
+
+// Where the code a test file tests usually sits, as module keys: perception.test.ts beside or
+// above it, test_cart.py next to cart.py or under src/, CartTest.java under src/main/.
+const testStem = (base) => base.replace(/\.[^.]+$/, '').replace(/\.(test|spec)$/i, '').replace(/^test_/i, '').replace(/_(test|spec)$/i, '').replace(/Tests?$/, '');
+export function testMirrors(path) {
+  const p = norm(path);
+  const stem = testStem(p.split('/').pop());
+  const dir = dirOf(p);
+  const seg = /(^|\/)(?:test|tests|__tests__)(\/|$)/;
+  const dirs = new Set([dir, dirOf(dir), dir.replace(/(^|\/)src\/test\//, '$1src/main/'), dir.replace(seg, '$1src$2'), dir.replace(seg, (m, a, b) => (a && b ? '/' : ''))]);
+  return new Set([...dirs].map(d => (d ? `${d}/${stem}` : stem)));
+}
+
+// A name the test calls with no import in view: in a file shown in part, the import may sit above
+// the hunk, so the module the test mirrors is what it means. A file shown whole has no such import.
+function mirrored(t, recv) {
+  if (t.whole || (recv && !/^[A-Z]/.test(recv))) return null;
+  const keys = testMirrors(t.path);
+  return (d) => keys.has(d.rec.mod);
 }
 
 const testCache = new WeakMap();
@@ -526,14 +571,14 @@ function whereFor(t, ref) {
     const key = t.names.get(recv ?? ref.name);
     if (key) return Object.assign((d) => d.rec.mod === key, { project: true });
     if (recv && /^[a-z_$]/.test(recv) && t.mods.size) return (d) => t.mods.has(d.rec.mod);
-    return null;
+    return mirrored(t, recv);
   }
   if (t.lang === 'py') {
     // A module under a top-level directory the diff touches is the project's own.
     const keys = t.names.get(recv ?? ref.name);
     if (keys) return Object.assign((d) => pyModMatch(d.rec.mod, keys), { project: (idx) => keys.some(k => idx.roots.has(k.split('/')[0])) });
     if (recv && /^[a-z_]/.test(recv) && t.mods.size) return (d) => pyModMatch(d.rec.mod, [...t.mods]);
-    return null;
+    return mirrored(t, recv);
   }
   if (t.lang === 'go' || t.lang === 'rust') {
     const dir = dirOf(t.path);
@@ -561,7 +606,8 @@ export function refsOf(text, f) {
   for (const name of new Set(code.match(/(?<![\w$.])[A-Za-z_$][\w$]*/g) ?? [])) {
     if (t.inits.has(name)) refs.push(...rawRefs(t.inits.get(name), t));
   }
-  const local = (r) => (r.recv ? t.inits.has(r.recv) : r.kind === 'call' && t.inits.has(r.name));
+  // A local the test also gives a type (Plan dull = Plan.lay(3)) points at that type instead.
+  const local = (r) => (r.recv ? t.inits.has(r.recv) && !t.locals.has(r.recv) : r.kind === 'call' && t.inits.has(r.name));
   return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : local(r) ? NOWHERE : whereFor(t, r) }));
 }
 
@@ -590,6 +636,10 @@ function rawRefs(text, t) {
   }
   for (const m of code.matchAll(/(?<![\w$.])((?:[A-Z][\w$]*\s*\.\s*)*[A-Z][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
     refs.push({ kind: 'field', name: m[2], recv: chain(m[1]), arity: null });
+  }
+  // A field read on a local whose type the test declares: dull.guides on an OilPlay.Plan dull.
+  for (const m of code.matchAll(/(?<![\w$.])([a-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
+    if (t.locals?.has(m[1])) refs.push({ kind: 'field', name: m[2], recv: m[1], arity: null });
   }
   // Bare names only count as constants or as names the test imports. The rest are its own locals.
   for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])(?!\s*:(?!:))/g)) {
