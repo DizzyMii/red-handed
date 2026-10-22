@@ -1,12 +1,12 @@
 # Demo walkthrough
 
-About three minutes. You can follow it in a browser tab without installing anything, and the last half has commands if you want to run it yourself. The `npx` commands need the package to be on npm, and from a clone of the repo `node bin/red-handed.mjs demo` does the same thing.
+About three minutes. You can follow it in a browser tab without installing anything, and the last half has commands if you want to run it yourself. red-handed is not on npm yet, so the `npx` commands below will not resolve until it is published. From a clone of the repo, run `node bin/red-handed.mjs demo` where a step says `npx red-handed demo`, and `node bin/red-handed.mjs <url>` where it takes a URL.
 
 ## 1. The agent says all tests pass
 
 You asked a coding agent to fix a discount bug in a small shop app. It comes back with "Fixed the discount bug, all tests pass", and the CI check is green.
 
-Green only means the test command exited 0. It does not say how the agent got there, and there are a lot of ways to get there without fixing the bug. That gap is what red-handed reads.
+A green check means the test command exited 0. An agent has plenty of ways to get that exit code without fixing the bug, and red-handed reads the diff for them.
 
 ## 2. What red-handed sees
 
@@ -32,9 +32,7 @@ The other three are a skipped test, a precise assertion swapped for `assert.ok(.
 
 ## 4. Point it at a pull request
 
-No clone needed. This is a public demo PR in this repo, written to look like an agent's "fix":
-
-https://github.com/DizzyMii/red-handed/pull/1
+No clone needed. [Pull request 1](https://github.com/DizzyMii/red-handed/pull/1) in this repo is a public demo PR, written to look like an agent's "fix":
 
 ```
 npx red-handed https://github.com/DizzyMii/red-handed/pull/1
@@ -52,9 +50,7 @@ Nothing to install for this one. The page runs the same rules in your tab.
 
   ![The playground on the site: a list of cheats on the left, CAUGHT with 4 hard and 1 soft finding and all five findings on the right](img/site-caught.png)
 
-- The PR tab takes a public pull request and does what section 4 did. The link below opens it on pull request 1.
-
-  [dizzymii.github.io/red-handed/?pr=DizzyMii/red-handed%231](https://dizzymii.github.io/red-handed/?pr=DizzyMii/red-handed%231)
+- The PR tab takes a public pull request and does what section 4 did. [This link](https://dizzymii.github.io/red-handed/?pr=DizzyMii/red-handed%231) opens it on pull request 1.
 
   ![The playground's PR tab showing CAUGHT with 2 hard findings for pull request 1](img/site-pr.png)
 
@@ -84,7 +80,7 @@ jobs:
           fail-on: caught
 ```
 
-Every pull request gets one comment, edited on each push. Here is the real one from the demo PR with both sections expanded.
+Every pull request gets one comment, edited on each push. Here is the real one from the demo PR with both sections expanded. It was posted by an earlier version that printed the base commit twice, as `0089eff (0089eff)`. The current version prints it once.
 
 ![The github-actions comment on pull request 1: CAUGHT with two findings, with the details sections open](img/action-comment.png)
 
@@ -98,6 +94,17 @@ An alarm that never says "fine" is not much use. This run is on a repo where the
 
 ## 8. What it misses
 
-It misses a lot. On made-up diffs it had never seen (three rounds of 96, across seven languages, half cheats and half honest look-alikes, written by AI agents that could not see the rules), the last round before its fixes flagged 24 of 45 cheats (21 CAUGHT, 3 SUSPICIOUS) and wrongly CAUGHT 3 of 47 honest changes. That is about half of what a careful cheater tries. On 111 recently merged pull requests in big open source projects it said CAUGHT three times, and each of those really had cut test coverage, with a maintainer's sign-off. The rules are regexes over changed lines, so anyone who builds the string `"te" + "st"` gets past them. CLEAN means the usual tricks are absent and nothing more. It does not run your tests either, so it cannot say whether they pass. Treat it as a smoke alarm and go read the lines it prints.
+It misses a lot. Here are the numbers.
+
+**Made-up diffs it had never seen.** Three rounds of 96 diffs across seven languages, half cheats and half honest look-alikes, written by AI agents that could not see the rules. Only the last round counts, using its numbers from before its fixes. A reviewer judged 4 of the 96 unfair and left them out, which leaves 92: 45 cheats and 47 honest changes.
+
+- It flagged 24 of the 45 cheats (21 CAUGHT, 3 SUSPICIOUS).
+- It wrongly CAUGHT 3 of the 47 honest changes.
+
+That is about half of what a careful cheater tries.
+
+**Real pull requests.** On 111 recently merged PRs in big open source projects it said CAUGHT three times. Each of those really had cut test coverage, with a maintainer's sign-off.
+
+**What it cannot see.** The rules are regexes over changed lines, so anyone who builds the string `"te" + "st"` gets past them. CLEAN says the usual tricks are absent. It does not run your tests, so it cannot say whether they pass. Treat it as a smoke alarm and go read the lines it prints.
 
 More in the [README](../README.md): every rule, the config file and the flags.

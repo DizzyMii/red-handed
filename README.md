@@ -20,7 +20,7 @@ npx red-handed demo
 That builds a throwaway repo, plays a pretend agent that "fixes" a discount bug five different ways, and scans what it did. This is the report (the real one has color):
 
 ```
-red-handed  agent/fix-discount vs main (ec4a1a9)
+red-handed  agent/fix-discount vs main (6fcf81a)
             3 files, 1 test file, assertions +2 -2
 
   CAUGHT   4 hard, 1 soft
@@ -48,7 +48,7 @@ red-handed  agent/fix-discount vs main (ec4a1a9)
       The expected value in an assertion changed. Fine if the behavior was meant to change, a cheat if the test was bent to match a bug.
 ```
 
-It exists because I got tired of reading agent diffs where the green checkmark came from the test file and not the code. Needs Node 20 or newer and git on your PATH.
+It exists because I got tired of reading agent diffs where the tests only passed because the agent had edited the tests. Needs Node 20 or newer and git on your PATH.
 
 ## Running it
 
