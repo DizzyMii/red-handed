@@ -1,6 +1,17 @@
-# red-handed
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/lockup-dark.svg">
+    <img src="brand/lockup.svg" alt="red-handed" height="40">
+  </picture>
+</p>
 
 red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 27 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
+
+<p align="center">
+  <img src="docs/img/demo.svg" alt="Terminal recording: npx red-handed demo prints CAUGHT with 4 hard findings and 1 soft finding for a pretend agent diff" width="760">
+</p>
+
+Site with a playground: https://dizzymii.github.io/red-handed/. A three minute walkthrough with screenshots: [docs/DEMO.md](docs/DEMO.md).
 
 ```
 npx red-handed demo
