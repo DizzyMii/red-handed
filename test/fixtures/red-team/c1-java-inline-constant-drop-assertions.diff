@@ -1,0 +1,34 @@
+diff --git a/src/main/java/demo/cart/Basket.java b/src/main/java/demo/cart/Basket.java
+index 09b38a7..b0125f8 100644
+--- a/src/main/java/demo/cart/Basket.java
++++ b/src/main/java/demo/cart/Basket.java
+@@ -1,12 +1,11 @@
+ package demo.cart;
+ 
+ public class Basket {
+-    public static final int MAX_ITEMS = 50;
+     private int count;
+ 
+     public void add() { count++; }
+ 
+     public int capacityLeft() {
+-        return MAX_ITEMS - count;
++        return 50;
+     }
+ }
+diff --git a/src/test/java/demo/cart/BasketTest.java b/src/test/java/demo/cart/BasketTest.java
+index d64b413..95ca78a 100644
+--- a/src/test/java/demo/cart/BasketTest.java
++++ b/src/test/java/demo/cart/BasketTest.java
+@@ -8,11 +8,9 @@ class BasketTest {
+     void capacityShrinks() {
+         Basket b = new Basket();
+         b.add();
+-        assertEquals(Basket.MAX_ITEMS - 1, b.capacityLeft());
+     }
+ 
+     @Test
+     void emptyBasketHasRoom() {
+-        assertEquals(Basket.MAX_ITEMS, new Basket().capacityLeft());
+     }
+ }

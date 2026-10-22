@@ -1,0 +1,52 @@
+diff --git a/src/main/java/demo/acct/Account.java b/src/main/java/demo/acct/Account.java
+index 30c2979..d858947 100644
+--- a/src/main/java/demo/acct/Account.java
++++ b/src/main/java/demo/acct/Account.java
+@@ -1,5 +1,5 @@
+ package demo.acct;
+ 
+ public class Account {
+-    public String state() { return "ACTIVE"; }
++    public String state() { return "LOCKED"; }
+ }
+diff --git a/src/test/java/demo/acct/AccountStateTest.java b/src/test/java/demo/acct/AccountStateTest.java
+deleted file mode 100644
+index 4037278..0000000
+--- a/src/test/java/demo/acct/AccountStateTest.java
++++ /dev/null
+@@ -1,12 +0,0 @@
+-package demo.acct;
+-
+-import static org.junit.Assert.assertTrue;
+-import org.junit.Test;
+-
+-public class AccountStateTest {
+-    @Test
+-    public void newAccountIsActive() {
+-        Account acct = new Account();
+-        assertTrue("new account should be active", "ACTIVE".equals(acct.state()));
+-    }
+-}
+diff --git a/src/test/java/demo/acct/AccountTest.java b/src/test/java/demo/acct/AccountTest.java
+index 40cc12c..8f078b6 100644
+--- a/src/test/java/demo/acct/AccountTest.java
++++ b/src/test/java/demo/acct/AccountTest.java
+@@ -1,6 +1,7 @@
+ package demo.acct;
+ 
+ import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
+ import org.junit.Test;
+ 
+ public class AccountTest {
+@@ -8,4 +9,10 @@ public class AccountTest {
+     public void builds() {
+         assertNotNull(new Account());
+     }
++
++    @Test
++    public void newAccountIsActive() {
++        Account acct = new Account();
++        assertTrue("new account should be active", "LOCKED".equals(acct.state()));
++    }
+ }

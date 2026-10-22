@@ -697,3 +697,46 @@ test('cheat_fp2_unittest_expected_value_is_not_a_message: an in-file expected-va
   assert.ok(CAUGHT(r), show(r));
   assert.equal(hard(r, 'assertion-removed').length, 2, show(r));
 });
+
+const cartTestJ5 = ['package demo.cart;', 'import org.junit.jupiter.api.Test;', 'class CartTest {', '  @Test', '  void totals() {',
+  '    assertEquals(7, new Cart(3, 4).total());', '    assertEquals(0, new Cart().total());', '    assertEquals(1, new Cart(1).lines());', '  }', '}'];
+const movedChecks = ['    assertEquals(7, new Cart(3, 4).total());', '    assertEquals(0, new Cart().total());', '    assertEquals(1, new Cart(1).lines());'];
+
+test('cheat_fp3_moved_under_class_level_disabled: @Disabled on the class switches the copies off', () => {
+  const filler = Array.from({ length: 15 }, (_, i) => [`  @Test`, `  void other${i}() {`, `    assertEquals(${i}, Order.of(${i}).size());`, '  }']).flat();
+  const r = run([
+    mkDiff('src/test/java/demo/cart/CartTest.java', cartTestJ5, [], { status: 'deleted' }),
+    mkDiff('src/test/java/demo/cart/OrderTest.java', [], ['package demo.cart;', 'import org.junit.jupiter.api.Disabled;', 'import org.junit.jupiter.api.Test;',
+      '@Disabled', 'class OrderTest {', ...filler, '  @Test', '  void totals() {', ...movedChecks, '  }', '}'], { status: 'added' }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp3_moved_under_module_pytestmark: pytestmark skip switches the whole module off', () => {
+  const r = run([
+    mkDiff('tests/test_slug.py', ['from app.text import slugify', '', 'def test_slug():', '    assert slugify("A B") == "a-b"', '    assert slugify("C") == "c"'], [], { status: 'deleted' }),
+    mkDiff('tests/test_text.py', [], ['import pytest', 'from app.text import slugify', '', 'pytestmark = pytest.mark.skip(reason="later")', '',
+      'def test_slug():', '    assert slugify("A B") == "a-b"', '    assert slugify("C") == "c"',
+      // Enough unrelated tests that the new file is no move of the old one.
+      ...Array.from({ length: 8 }, (_, i) => ['', `def test_title_${i}():`, `    assert titled("w${i}") == "W${i}"`]).flat()], { status: 'added' }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+  assert.ok(hits(r, 'test-skipped').length > 0, show(r));
+});
+
+test('cheat_fp3_moved_under_describe_skip: the deleted file stays HARD, not only the skip', () => {
+  const r = run([
+    mkDiff('test/cart.test.js', ["import { total } from '../src/cart.js';", "it('sums', () => {", '  expect(total([3, 4])).toBe(7);', '});'], [], { status: 'deleted' }),
+    mkDiff('test/order.test.js', [], ["describe.skip('cart', () => {", "  it('sums', () => {", '    expect(total([3, 4])).toBe(7);', '  });', '});'],
+      { before: ["import { total } from '../src/cart.js';"] }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('honest_fp3_moved_into_test_class: a pytest class named Test still counts', () => {
+  const r = run([
+    mkDiff('tests/test_slug.py', ['from app.text import slugify', '', 'def test_slug():', '    assert slugify("A B") == "a-b"'], [], { status: 'deleted' }),
+    mkDiff('tests/test_text.py', [], ['', 'class TestSlug:', '    def test_slug(self):', '        assert slugify("A B") == "a-b"'], { before: ['from app.text import slugify'] }),
+  ]);
+  assert.equal(hits(r, 'test-deleted').length, 0, show(r));
+});

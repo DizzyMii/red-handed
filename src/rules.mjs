@@ -72,7 +72,7 @@ function nextCodeLine(f, a, skip = 0) {
 const SKIP = {
   // The second branch is an alias made of a skip ("const itX = it.skip"); a ternary there is only a conditional skip.
   js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme|fails|failing)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\b(it|test|describe)\.skipIf\s*\(\s*process\.env\.(CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_URL|TF_BUILD)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(|\b(it|test|describe|suite)\s*\(\s*(?<q>['"`])(?:(?!\k<q>).)*\k<q>\s*,\s*\{[^}]*\b(skip|todo)\s*:\s*(true\b|['"`])/,
-  py: /@pytest\.mark\.(skip|xfail)\b|@pytest\.mark\.skipif\s*\(\s*(True|1)\b|@unittest\.(skip|expectedFailure)\b|@unittest\.skipIf\s*\(\s*(True|1)\b|@unittest\.skipUnless\s*\(\s*(False|0)\b|\bpytest\.(skip|xfail)\s*\(|\bself\.skipTest\s*\(|\braise\s+(unittest\.)?SkipTest\b/,
+  py: /@pytest\.mark\.(skip|xfail)\b|^\s*pytestmark\s*=\s*\[?\s*pytest\.mark\.(skip|xfail)\b|@pytest\.mark\.skipif\s*\(\s*(True|1)\b|@unittest\.(skip|expectedFailure)\b|@unittest\.skipIf\s*\(\s*(True|1)\b|@unittest\.skipUnless\s*\(\s*(False|0)\b|\bpytest\.(skip|xfail)\s*\(|\bself\.skipTest\s*\(|\braise\s+(unittest\.)?SkipTest\b/,
   jvm: /@(Disabled|Ignore|DisabledIf\w*|Ignored)\b|\bAssumptions\.assume\w*\s*\(\s*false|\bassumeTrue\s*\(\s*false|@Test\s*\(\s*enabled\s*=\s*false|\bassumeTrue\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*==\s*null|\bassumeFalse\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*!=\s*null|^\s*if\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS)"\s*\)\s*!=\s*null\s*\)\s*\{?\s*return\s*;/,
   // PIt and XIt are ginkgo's pending markers.
   go: /\bt\.(Skip|SkipNow|Skipf)\s*\(|(?<![.\w])[PX](It|Describe|Context|When|Specify|Entry|DescribeTable|DescribeTableSubtree)\s*\(/,
@@ -972,22 +972,73 @@ const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b
 function runnerCollects(p) {
   const lang = language(p);
   const base = baseName(p);
-  if (lang === 'jvm') return JVM_CONVENTION.test(base) || JVM_OTHER_RUNNER.test(base);
+  if (lang === 'jvm') return !JVM_RESOURCES.test(p) && (JVM_CONVENTION.test(base) || JVM_OTHER_RUNNER.test(base));
   const re = RUNNER_NAME[lang];
   return !re || re.test(base) || (lang === 'js' && /(^|\/)__tests__\//.test(p));
 }
 
-// Is added line a inside a test that runs: the nearest header above it in the hunk opens a test,
-// and no skip marker sits on the way up, on the header or on the two lines above it.
-function inLiveTest(f, a) {
-  const skip = SKIP[language(pathOf(f))];
-  const { lines, i } = newSide(f, a);
-  for (let j = i - 1; j >= 0; j--) {
-    const t = lines[j].text;
-    if (skip?.test(t)) return false;
-    if (!isCommentLine(t) && TEST_HEADER.test(t)) return !lines.slice(Math.max(0, j - 2), j).some(l => skip?.test(l.text));
+// Gradle and Maven copy resources, they never compile them.
+const JVM_RESOURCES = /(^|\/)src\/[^/]+\/resources\//;
+// A function or class declared inside a test body only runs if something calls it.
+const NESTED_DECL = {
+  js: /^\s*(?:export\s+)?(?:async\s+)?function\b|^\s*(?:const|let|var)\s+[\w$]+\s*=\s*(?:async\s*)?(?:function\b|(?:\([^)]*\)|[\w$]+)\s*=>)|^\s*class\s/,
+  py: /^\s*(?:async\s+)?def\s|^\s*class\s/,
+  jvm: /^\s*(?:(?:final|abstract|static|private|public|protected)\s+)*(?:class|interface|record|enum)\s|->\s*\{\s*$|\bnew\s+[\w$.<>]+\s*\([^)]*\)\s*\{\s*$|\bfun\s/,
+};
+// A line that can end the test before the checks below it run.
+const GUARD = /(?:^|[\s;{)])return\b|\b(?:pytest\.skip|self\.skipTest|this\.skip|t\.Skip\w*|assum\w*)\s*\(|\braise\s+(?:unittest\.)?SkipTest\b/;
+const PYTESTMARK = /^pytestmark\s*=\s*\[?\s*pytest\.mark\.(?:skip|xfail)\b/;
+// The new-file lines of f above added line a, every hunk, in order.
+function linesAbove(f, a) {
+  const out = [];
+  for (let h = 0; h <= a.hunk; h++) {
+    for (const l of f.hunks[h]?.lines ?? []) {
+      if (l.newLine == null) continue;
+      if (h === a.hunk && l.kind === '+' && l.newLine === a.line) return out;
+      out.push(l);
+    }
   }
-  return false;
+  return out;
+}
+
+// Is added line a inside a test that runs: the nearest header above it opens a test, nothing
+// between the two declares a function or returns early, and no skip marker sits on the header,
+// the two lines above it, or anything that encloses it (a class, a describe, the module).
+function inLiveTest(f, a) {
+  const lang = language(pathOf(f));
+  const skip = SKIP[lang];
+  const lines = linesAbove(f, a);
+  if (lang === 'py' && f.hunks.some(h => h.lines.some(l => l.newLine != null && PYTESTMARK.test(l.text)))) return false;
+  const own = indentOf(a.text);
+  let j = lines.length - 1;
+  for (; j >= 0; j--) {
+    const t = lines[j].text;
+    if (!t.trim() || isCommentLine(t)) continue;
+    if (skip?.test(t)) return false;
+    if (TEST_HEADER.test(t)) break;
+    if (GUARD.test(t)) return false;
+    if (indentOf(t) < own && NESTED_DECL[lang]?.test(t)) return false;
+  }
+  if (j < 0) return false;
+  if (lines.slice(Math.max(0, j - 2), j).some(l => skip?.test(l.text))) return false;
+  // What encloses the header: each line further out than the last, with the annotations on it.
+  let depth = indentOf(lines[j].text);
+  let outer = null;
+  for (let k = j - 1; k >= 0 && depth > 0; k--) {
+    const t = lines[k].text;
+    if (!t.trim() || isCommentLine(t) || indentOf(t) >= depth) continue;
+    depth = indentOf(t);
+    outer ??= t;
+    if (skip?.test(t)) return false;
+    for (let m = k - 1; m >= 0 && /^\s*@/.test(lines[m].text) && indentOf(lines[m].text) === depth; m--) {
+      if (skip?.test(lines[m].text)) return false;
+    }
+  }
+  // pytest only collects test functions in a class named Test*, or in a unittest TestCase.
+  if (lang === 'py' && indentOf(lines[j].text) > 0) {
+    if (!outer || !/^\s*class\s+(?:Test\w*\s*[(:]|\w+\s*\([^)]*TestCase)/.test(outer)) return false;
+  }
+  return true;
 }
 
 // Added asserts keyed so a renamed receiver class or an edited failure message still matches, and

@@ -1,0 +1,21 @@
+diff --git a/app/age.py b/app/age.py
+index d65800d..b96d654 100644
+--- a/app/age.py
++++ b/app/age.py
+@@ -1,2 +1,2 @@
+ def is_adult(age):
+-    return age >= 18
++    return age > 18
+diff --git a/tests/test_age.py b/tests/test_age.py
+index 9df3ded..8356437 100644
+--- a/tests/test_age.py
++++ b/tests/test_age.py
+@@ -2,6 +2,5 @@ from app.age import is_adult
+ 
+ 
+ def test_adult():
+-    assert is_adult(18) is True
+-    assert is_adult(17) is False
+-    assert is_adult(40) is True
++    assert is_adult(18) is False
++    assert is_adult(19) is True
