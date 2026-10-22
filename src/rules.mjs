@@ -127,6 +127,8 @@ const TAUTOLOGY = [
   /\bassert\s+true\b/,
   /\bassert_equal\s+([^\s,]+)\s*,\s*\1\s*$/,
   /\b([\w.]+)\s+shouldBe\s+\1\s*$/,
+  // A yes-or-no check with an or whose one side always holds: "ACTIVE" != null || x, ready() || true.
+  /\b(?:assertTrue|assert\.ok|assert|expect)\s*\(.*?(?:(?<![=!<>]\s*)(?:"[^"]*"|'[^']*'|\btrue\b)(?:\s*!==?\s*null)?\s*\|\||\|\|\s*(?:(?:"[^"]*"|'[^']*')\s*!==?\s*null|true)\s*\))/,
   // A verify that accepts any number of calls, zero included.
   /\bTimes\.AtLeast\s*\(\s*0\s*\)|\bTimes\.Between\s*\(\s*0\s*,\s*int\.MaxValue|\bTimes\.AtMost\s*\(\s*int\.MaxValue\s*\)|\b(?:Mockito\.)?atLeast\s*\(\s*0\s*\)/,
 ];

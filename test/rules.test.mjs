@@ -198,6 +198,11 @@ test('tautology-added: a real assertion is not a tautology', () => {
   neg(mkDiff('test/a.test.js', [], ['expect(result).toBe(true)', 'assert.equal(total, 1)', 'expect(1).toBe(2)']), 'tautology-added');
 });
 
+test('tautology-added: an or with a side that is always true', () => {
+  for (const l of ['assertTrue("ACTIVE" != null || acct.state() == null);', 'assertTrue("must be on", "ON" != null || on());', 'assert.ok(ready() || true);', 'assert.ok(true || ready());']) pos(mkDiff('test/a.test.js', [], [l]), 'tautology-added');
+  neg(mkDiff('test/a.test.js', [], ['assert.ok(s === "a" || s === "b");', 'assertTrue("on or idle", isOn() || isIdle());', 'assertTrue(x.equals("a") || x.equals("b"));']), 'tautology-added');
+});
+
 test('tautology-added: only test paths count, and comments do not', () => {
   neg(mkDiff('src/a.js', [], ['expect(true).toBe(true)']), 'tautology-added');
   neg(mkDiff('test/a.test.js', [], ['// expect(true).toBe(true)']), 'tautology-added');
