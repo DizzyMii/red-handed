@@ -172,6 +172,14 @@ export function declarationsOn(text, lang) {
     text = text.replace(/@[\w$.]+(?:\([^)]*\))?\s*/g, '');
     const t = JVM_TYPE.exec(text);
     if (t) out.push({ name: t[1], kind: 'type', arity: null });
+    // An enum on one line: "enum Slot { HEAD, CHEST }" declares its constants, owned by the enum.
+    const oneLine = t && /\benum\s+[\w$]+[^{]*\{([^{}]*)\}/.exec(text);
+    if (oneLine) {
+      for (const c of oneLine[1].split(';')[0].split(',')) {
+        const name = /^\s*([A-Z][A-Z0-9_]*)\b/.exec(c)?.[1];
+        if (name) out.push({ name, kind: 'field', arity: null, in: t[1] });
+      }
+    }
     const k = KOTLIN_FUN.exec(text);
     if (k) out.push({ name: k[1], kind: 'fn', arity: countArgs(stripGenerics(k[2])) });
     const m = !t && !k && JVM_METHOD_TAIL.test(text) && JVM_METHOD.exec(text);
@@ -332,8 +340,8 @@ export function sourceIndex(ctx) {
         const owner = top ? top.name : stem;
         for (const d of found) {
           const decl = { ...d, side: l.kind, hunk, rec, top: ind === 0, outer: types[0]?.name ?? stem,
-            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod,
-            ownerGuessed: OVERLOADS.has(lang) && d.kind !== 'type' && (!top || top.carried) };
+            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : d.in ?? owner) : rec.mod,
+            ownerGuessed: OVERLOADS.has(lang) && d.kind !== 'type' && !d.in && (!top || top.carried) };
           decls.push(decl);
           inHunk.push(decl);
           if (!byName.has(decl.name)) byName.set(decl.name, []);
