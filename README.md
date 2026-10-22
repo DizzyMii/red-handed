@@ -150,6 +150,14 @@ Put a `.red-handed.json` in the repo root:
 
 `tests` adds globs that count as test files, `ignore` drops files from every check, and `allow` silences one rule on matching paths (the reason is for the next person to read). The file is read from the base side of the diff, so a change cannot add its own exemption. If a change edits the allow list, that is a HARD finding (`allowlist-edited`). Config is only read in local mode, a pull request or a diff on stdin gets the defaults and a note saying so.
 
+## How well it works
+
+I tested it two ways.
+
+**Real pull requests.** 111 PRs recently merged into React, Next.js, VS Code, Django, Flask, Pydantic, Kubernetes, Terraform, Tokio, Spring Boot, ASP.NET Core and Rails. It said CAUGHT three times. Each one really did cut test coverage (a revert that took its tests with it, a flaky check that got deleted, an assertion wrapped in a try), and each had a reason and a maintainer's sign-off. That is the kind of thing it should make you look at. A fourth CAUGHT, on a test added already marked as failing, was wrong and is fixed. On 16 PRs opened by AI coding agents it flagged nothing, which was correct for all 16.
+
+**Made-up diffs it never saw.** Three rounds of 96 diffs across seven languages, half cheats and half honest look-alikes, written by separate AI agents that could not see the rules. Each round's misses got fixed, so only the last round's numbers, taken before its fixes and leaving out 4 cases a reviewer judged unfair, mean anything: 24 of 45 cheats flagged (21 CAUGHT, 3 SUSPICIOUS) and 3 of 47 honest changes wrongly CAUGHT. So it misses about half of what a careful cheater tries.
+
 ## What it does not do
 
 It does not use an AI model and makes no network calls except the GitHub API in pull request mode. It does not run your tests, so it cannot tell you whether they pass. A determined author can get around it (build the string `"te" + "st"`, or move the cheat somewhere it does not look), so a CLEAN means the usual tricks are absent and nothing more. Treat it as a smoke alarm: when it goes off, go look at the lines it printed.
