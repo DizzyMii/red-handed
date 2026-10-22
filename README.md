@@ -1,6 +1,6 @@
 # red-handed
 
-red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 25 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
+red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 26 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
 
 ```
 npx red-handed demo
@@ -87,6 +87,7 @@ HARD findings are things that have almost no honest reason to appear in a fix. O
 | HARD | `stubbed-call-asserted` | A test stubs a method on an object and then calls that same method, so what it checks is the stub. |
 | HARD | `assertion-swallowed` | A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it. |
 | SOFT | `expectation-edited` | The expected value in an assertion changed. Fine if the behavior was meant to change, a cheat if the test was bent to match a bug. |
+| SOFT | `coverage-lowered` | A coverage threshold was lowered, or source was left out of coverage. Fine if it was meant, a cheat if it makes the build pass. |
 | SOFT | `test-case-removed` | A row was taken out of a table of test cases and none was added, so the test covers fewer inputs. |
 | SOFT | `snapshot-rewritten` | Saved snapshots were regenerated alongside a code change. Check the new snapshot is what you actually want. |
 | SOFT | `suppression-added` | A type-checker, linter or coverage warning was silenced instead of fixed. |

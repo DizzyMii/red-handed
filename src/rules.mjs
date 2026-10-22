@@ -130,13 +130,13 @@ const TEST_INFRA = ['/test-utils', '/testing/', 'jest.setup', 'vitest.setup', 's
 // A bare "test" only counts as a word of its own: "test-db" and "./test/" are not the runner.
 const RUNNER = /\b(jest|vitest|mocha|pytest|unittest|tox|nox|go\s+test|cargo\s+test|gradle\w*\s+\w*test|mvn\s+\w*\s*test|rspec|dotnet\s+test|npm\s+(run\s+)?test|yarn\s+test|pnpm\s+test|make\s+(test|check)|ctest|phpunit)\b|(?<![-\w./])tests?(?![-\w./])|"test(:[\w-]+)?"\s*:/i;
 // "|| :" is written with a lookahead because \b never matches after a colon.
-const NEUTER = /\|\|\s*(?:(?:true|exit\s+0)\b|:(?!\w))|;\s*(true|exit\s+0)\s*$|--passWithNoTests|--pass-with-no-tests|--no-tests\b|exit\s+0|--testPathIgnorePatterns|--deselect\b|-k\s+['"]?not\s|--ignore[= ]\S*test|-DskipTests|-Dmaven\.test\.skip=true|-x\s+test\b|--exclude-task\s+test\b|--skip\s+\S*test|\becho\s+['"]?(ok|pass|passed|tests? passed)|(^|\s)-skip[= ]\S+|--filter\s+['"]?[^'"]*!(~|=)|-Dtest=['"]?!|--tag\s+~|process\.exit\(\s*0\s*\)/i;
+const NEUTER = /\|\|\s*(?:(?:true|exit\s+0)\b|:(?!\w))|;\s*(true|exit\s+0)\s*$|--passWithNoTests|--pass-with-no-tests|--no-tests\b|exit\s+0|--deselect\b|-k\s+['"]?not\s|--ignore[= ]\S*test|-DskipTests|-Dmaven\.test\.skip=true|-x\s+test\b|--exclude-task\s+test\b|--skip\s+\S*test|\becho\s+['"]?(ok|pass|passed|tests? passed)|(^|\s)-skip[= ]\S+|--filter\s+['"]?[^'"]*!(~|=)|-Dtest=['"]?!|--tag\s+~|process\.exit\(\s*0\s*\)/i;
 const TEST_SCRIPT = /^\s*"test"\s*:/;
 // An empty script, or one that only echoes. An echo followed by && or ; still runs something after it.
 const NEUTERED_SCRIPT = /^\s*"test"\s*:\s*"\s*(echo(?:\\.|(?!&&|;|\|)[^"\\])*|exit 0|true|:)?\s*"/i;
 // Only ignore settings that name something test-shaped count (jest's testPathIgnorePatterns is judged by ignoresRealDirs): the Next.js .next/ ignore, flake8's
 // --ignore=E203 and norecursedirs = .git .venv are ordinary config.
-const BUILD_NEUTER = /ignoreFailures\s*=\s*true|testFailureIgnore\s*[>=]\s*['"]?true|<skipTests>\s*true|<maven\.test\.skip>\s*true|\bnorecursedirs\s*=.*\b(tests?|spec)\b|\b(pytest|py\.test)\b.*--ignore=\S*(test|spec)|collect_ignore\b|addopts\s*=.*(--deselect|-k\s+['"]?not\s|--ignore)/;
+const BUILD_NEUTER = /ignoreFailures\s*=\s*true|testFailureIgnore\s*[>=]\s*['"]?true|<skipTests>\s*true|<maven\.test\.skip>\s*true|\bnorecursedirs\s*=.*\b(tests?|spec)\b|\b(pytest|py\.test)\b.*--ignore=\S*(test|spec)|collect_ignore\b|addopts\s*=.*(--deselect|-k\s+['"]?not\s|--ignore)|--deselect\b|<VSTestTestCaseFilter>[^<]*!(~|=)|<TestCaseFilter>[^<]*!(~|=)/;
 
 // -diff, binary and -text really hide content. linguist-generated only collapses it on GitHub, and
 // is an honest thing to say about protobuf output, so it is HARD only for tests and snapshots.
@@ -598,6 +598,96 @@ function leavesRunnerName(ctx, f) {
   return { softer: !known };
 }
 
+// pnpm and turbo take --filter=!pkg to leave a package out of the run. Leaving out only docs or examples is ordinary.
+const NEGATED_FILTER = /(?:--filter|-F)[= ]['"]?!(\S+)/g;
+const DOCS_LIKE = /docs?|examples?|website|storybook/i;
+function negatedFilter(text) {
+  const names = [...text.matchAll(NEGATED_FILTER)].map(m => m[1].replace(/["',]+$/, ''));
+  return names.length ? names : null;
+}
+
+// --testPathIgnorePatterns drops paths from the run. An e2e style split is ordinary when the same file runs it elsewhere.
+function ignoresTestPaths(f, a) {
+  const at = a.text.indexOf('--testPathIgnorePatterns');
+  if (at < 0) return false;
+  let rest = a.text.slice(at + '--testPathIgnorePatterns'.length).replace(/^(=|\s+)/, '');
+  const tokens = [];
+  let m;
+  while ((m = /^\s*(['"`]?)([^\s"'`;|&]+)\1/.exec(rest)) && !m[2].startsWith('-')) {
+    tokens.push(m[2].replace(/^<rootDir>\/?/, '').replace(/^\/+|\/+$/g, ''));
+    rest = rest.slice(m[0].length);
+  }
+  if (!tokens.length) return true;
+  return tokens.some(tok => {
+    if (OUTPUT_DIRS.has(tok)) return false;
+    if (!EXCLUDE_OK.has(tok)) return true;
+    return !f.added.some(x => x !== a && RUNNER.test(x.text) && x.text.includes(tok));
+  });
+}
+
+// ---- coverage gates ----
+const COVERAGE_FILE = /^(\.coveragerc|\.nycrc.*|\.?codecov\.ya?ml)$/;
+const COVERAGE_KEY = /\b(branches|functions|lines|statements|fail_under|fail-under|minimum_coverage_by_file|minimum_coverage|minimumCoverage|minimum|threshold|coveredRatio)\b["']?\s*[:=>]?\s*['"]?(\d*\.?\d+)/;
+const COVERAGE_KEY_STRONG = /^(fail_under|fail-under|minimum_coverage_by_file|minimum_coverage|minimumcoverage)$/;
+const GENERATED_PATH = /(^|\/)(tests?|spec|specs|__tests__|migrations?|generated|gen|proto|protos|pb|fixtures?|mocks?|stubs?|vendor|node_modules|dist|build|docs?|examples?|scripts?)(\/|$)|(^|\/)test_|_test\b|\.(test|spec)\.|_pb2?\b|\.pb\.|\.d\.ts|\.min\./i;
+
+function coverageNumber(text, strongOnly) {
+  const m = COVERAGE_KEY.exec(text);
+  if (!m) return null;
+  const key = m[1].toLowerCase();
+  if (strongOnly && !COVERAGE_KEY_STRONG.test(key)) return null;
+  return { key, value: Number(m[2]), fraction: m[2].includes('.') };
+}
+
+// Added lines that leave source out of coverage: omit = [...], exclude(...) in a jacoco block,
+// coveragePathIgnorePatterns. Generated code, tests and vendored dirs do not count.
+function coverageExclusion(text, hunk) {
+  const listed = /^\s*omit\s*[=:]|coveragePathIgnorePatterns/.test(text);
+  const jacoco = /\bexclude\s*\(/.test(text) && hunk.lines.some(l => /jacoco|coverage|classDirectories/i.test(l.text));
+  if (!listed && !jacoco) return false;
+  let tokens = (text.match(/'[^']*'|"[^"]*"/g) ?? []).map(q => q.slice(1, -1));
+  if (!tokens.length && listed) tokens = text.replace(/^[^=:]*[=:]/, '').split(/[,\s]+/);
+  return tokens.some(tok => {
+    const dir = tok.replace(/^<rootDir>/, '').replace(/\*+/g, '').replace(/^\.?\/+|\/+$/g, '');
+    return dir !== '' && !GENERATED_PATH.test(dir);
+  });
+}
+
+// Every lowered coverage number in the diff, and every added exclusion of source from coverage.
+// A key that falls 20 points in a change that adds source or excludes some is hard; the rest is soft.
+const coverageCache = new WeakMap();
+function coverageChanges(ctx) {
+  if (coverageCache.has(ctx)) return coverageCache.get(ctx);
+  const lowered = [];
+  const exclusions = [];
+  for (const f of ctx.files) {
+    const p = f.newPath;
+    if (p == null) continue;
+    const gate = isBuildPath(p) || COVERAGE_FILE.test(baseName(p));
+    if (!gate && !ctx.isTest(p)) continue;
+    for (const h of f.hunks) {
+      const rem = h.lines.filter(l => l.kind === '-' && !isCommentLine(l.text)).map(l => ({ l, n: coverageNumber(l.text, !gate) })).filter(x => x.n);
+      for (const l of h.lines) {
+        if (l.kind !== '+' || isCommentLine(l.text)) continue;
+        if (gate && coverageExclusion(l.text, h)) exclusions.push({ p, l });
+        const n = coverageNumber(l.text, !gate);
+        if (!n) continue;
+        const j = rem.findIndex(x => x.n.key === n.key);
+        if (j < 0) continue;
+        const [old] = rem.splice(j, 1);
+        const fraction = (old.n.fraction || n.fraction) && Math.max(old.n.value, n.value) <= 1;
+        const drop = (old.n.value - n.value) * (fraction ? 100 : 1);
+        if (drop > 0) lowered.push({ p, l, old: old.l, drop });
+      }
+    }
+  }
+  const addsSource = ctx.files.some(g => g.newPath != null && isSourceFile(ctx, g.newPath) && g.added.some(x => x.text.trim() && !isCommentLine(x.text)));
+  const big = (c) => c.drop >= 20 && (addsSource || exclusions.length > 0);
+  const out = { hard: lowered.filter(big), soft: lowered.filter(c => !big(c)), exclusions };
+  coverageCache.set(ctx, out);
+  return out;
+}
+
 const SUPPRESS_ASSERTION = /\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
 // ---- the rules, in spec order ---------------------------------------------------------------
@@ -792,8 +882,25 @@ export const RULES = [
       if (!build && !ci) continue;
       const pkg = baseName(p) === 'package.json';
       for (const a of f.added) {
-        if (isCommentLine(a.text)) continue;
-        if (RUNNER.test(a.text) && NEUTER.test(a.text)) add(p, a.line, null, a.text);
+        if (isCommentLine(a.text) && baseName(p) !== '.rspec') continue; // every .rspec line starts with --
+        if (RUNNER.test(a.text)) {
+          if (NEUTER.test(a.text)) add(p, a.line, null, a.text);
+          else if (ignoresTestPaths(f, a)) add(p, a.line, null, a.text);
+          else {
+            const left = negatedFilter(a.text);
+            if (left) add(p, a.line, null, a.text, undefined, left.every(n => DOCS_LIKE.test(n)));
+          }
+        }
+        if (baseName(p) === '.rspec') {
+          const m = /--exclude-pattern[= ]\s*['"]?([^'"\s]+)/.exec(a.text);
+          if (m) {
+            // A file named outright is a dropped test; a directory glob is usually a split, soft when CI runs it.
+            const named = /_spec\.rb$/.test(m[1]) && !baseName(m[1]).includes('*');
+            const dir = m[1].replace(/\*.*$/, '').replace(/\/$/, '');
+            const runElsewhere = dir !== '' && ctx.files.some(g => isCiPath(pathOf(g)) && g.added.some(x => RUNNER.test(x.text) && x.text.includes(dir)));
+            add(p, a.line, null, a.text, undefined, !named || runElsewhere);
+          }
+        }
         if (pkg && NEUTERED_SCRIPT.test(a.text)) add(p, a.line, null, a.text);
         if (build && (BUILD_NEUTER.test(a.text) || ignoresRealDirs(a.text) || excludesRealDirs(f, a))) add(p, a.line, null, a.text);
         if (baseName(p) === 'Cargo.toml') {
@@ -829,6 +936,9 @@ export const RULES = [
       for (const { a, near } of ciContinueOnError(f)) if (near) add(p, a.line, null, a.text);
     }
     if (ciRemoved.length > ciAdded) for (const { p, r } of ciRemoved.slice(0, 10)) add(p, r.line, r.text, null);
+    for (const c of coverageChanges(ctx).hard) {
+      add(c.p, c.l.newLine, c.old.text, c.l.text, 'A coverage threshold was cut by 20 points or more in a change that adds code or leaves source out of coverage.');
+    }
   }),
 
   defineRule({
@@ -1010,6 +1120,15 @@ export const RULES = [
         for (const l of removedRows(h).slice(0, 10)) add(pathOf(f), l.oldLine, l.text, null);
       }
     }
+  }),
+
+  defineRule({
+    id: 'coverage-lowered', tier: 'SOFT', title: 'Coverage gate loosened',
+    why: 'A coverage threshold was lowered, or source was left out of coverage. Fine if it was meant, a cheat if it makes the build pass.',
+  }, (ctx, add) => {
+    const { soft, exclusions } = coverageChanges(ctx);
+    for (const c of soft) add(c.p, c.l.newLine, c.old.text, c.l.text);
+    for (const e of exclusions) add(e.p, e.l.newLine, null, e.l.text);
   }),
 
   defineRule({

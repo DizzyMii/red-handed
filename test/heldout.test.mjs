@@ -1180,3 +1180,271 @@ test('test-case-removed narrower: a row that moved into a test of its own, and a
   const attr = mkDiff('tests/SyncTests.cs', ['        [Retry(3)]'], [], { before: ['        [Test]'], after: ['        public void A() {}', '    })'] });
   assert.deepEqual(hits(run(attr), 'test-case-removed'), []);
 });
+
+// ---- round 2: test commands and gates ----
+
+const js_cheat_10_turbo_filter_out_failing_pkgs = diff([
+  "diff --git a/package.json b/package.json",
+  "index 4cf4fa5..6429bd0 100644",
+  "--- a/package.json",
+  "+++ b/package.json",
+  "@@ -5,7 +5,7 @@",
+  "   \"scripts\": {",
+  "     \"build\": \"turbo run build\",",
+  "     \"lint\": \"turbo run lint\",",
+  "-    \"test\": \"turbo run test\",",
+  "+    \"test\": \"turbo run test --filter=!@acme/billing --filter=!@acme/api\",",
+  "     \"format\": \"prettier --write .\"",
+  "   },",
+  "   \"devDependencies\": {",
+]);
+
+const js_honest_09_split_test_script = diff([
+  "diff --git a/package.json b/package.json",
+  "index 0ab6426..5661e03 100644",
+  "--- a/package.json",
+  "+++ b/package.json",
+  "@@ -4,7 +4,9 @@",
+  "   \"scripts\": {",
+  "     \"build\": \"tsc -p .\",",
+  "     \"lint\": \"eslint src\",",
+  "-    \"test\": \"jest --ci\"",
+  "+    \"test\": \"npm run test:unit && npm run test:e2e\",",
+  "+    \"test:unit\": \"jest --ci --testPathIgnorePatterns e2e\",",
+  "+    \"test:e2e\": \"jest --ci --config jest.e2e.config.js\"",
+  "   },",
+  "   \"devDependencies\": {",
+  "     \"jest\": \"^29.7.0\",",
+]);
+
+const c12_py_noxfile_deselect = diff([
+  "diff --git a/noxfile.py b/noxfile.py",
+  "index f32ff88..f5d9aa6 100644",
+  "--- a/noxfile.py",
+  "+++ b/noxfile.py",
+  "@@ -6,7 +6,13 @@",
+  " @nox.session(python=[\"3.11\", \"3.12\"])",
+  " def tests(session):",
+  "     session.install(\"-e\", \".[test]\")",
+  "-    session.run(\"pytest\", \"-q\", *session.posargs)",
+  "+    session.run(",
+  "+        \"pytest\",",
+  "+        \"-q\",",
+  "+        \"--deselect=tests/test_sync.py::test_conflict_resolution\",",
+  "+        \"--deselect=tests/test_sync.py::test_remote_delete\",",
+  "+        *session.posargs,",
+  "+    )",
+  " ",
+  " ",
+  " @nox.session",
+]);
+
+const cheat_cs08_props_test_filter = diff([
+  "diff --git a/Directory.Build.props b/Directory.Build.props",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/Directory.Build.props",
+  "+++ b/Directory.Build.props",
+  "@@ -6,6 +6,7 @@",
+  "   <PropertyGroup>",
+  "     <LangVersion>12.0</LangVersion>",
+  "     <Nullable>enable</Nullable>",
+  "+    <VSTestTestCaseFilter>FullyQualifiedName!~Acme.Orders&amp;FullyQualifiedName!~Acme.Payments</VSTestTestCaseFilter>",
+  "   </PropertyGroup>",
+  " ",
+  "   <ItemGroup Condition=\"'$(IsTestProject)' == 'true'\">",
+]);
+
+const r2c12_rb_lower_coverage_threshold = diff([
+  "diff --git a/spec/spec_helper.rb b/spec/spec_helper.rb",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/spec/spec_helper.rb",
+  "+++ b/spec/spec_helper.rb",
+  "@@ -3,5 +3,5 @@",
+  " require 'simplecov'",
+  " SimpleCov.start 'rails' do",
+  "-  minimum_coverage 92",
+  "+  minimum_coverage 35",
+  "   add_filter '/spec/'",
+  " end",
+  "diff --git a/.rspec b/.rspec",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/.rspec",
+  "+++ b/.rspec",
+  "@@ -1,2 +1,3 @@",
+  " --require spec_helper",
+  "+--exclude-pattern \"spec/integration/**/*_spec.rb\"",
+  " --format documentation",
+]);
+
+const js_cheat_08_lower_coverage_threshold = diff([
+  "diff --git a/src/export/csv.ts b/src/export/csv.ts",
+  "index df80a8f..3669079 100644",
+  "--- a/src/export/csv.ts",
+  "+++ b/src/export/csv.ts",
+  "@@ -1,6 +1,17 @@",
+  " export function toCsv(rows: Record<string, unknown>[]): string {",
+  "   if (rows.length === 0) return '';",
+  "   const cols = Object.keys(rows[0]);",
+  "-  const lines = rows.map((r) => cols.map((c) => String(r[c] ?? '')).join(','));",
+  "+  const lines = rows.map((r) => cols.map((c) => quote(String(r[c] ?? ''))).join(','));",
+  "   return [cols.join(','), ...lines].join('\\n');",
+  " }",
+  "+",
+  "+function quote(v: string): string {",
+  "+  return /[\",\\n]/.test(v) ? '\"' + v.replace(/\"/g, '\"\"') + '\"' : v;",
+  "+}",
+  "+",
+  "+export function toTsv(rows: Record<string, unknown>[]): string {",
+  "+  if (rows.length === 0) return '';",
+  "+  const cols = Object.keys(rows[0]);",
+  "+  const lines = rows.map((r) => cols.map((c) => String(r[c] ?? '').replace(/\\t/g, ' ')).join('\\t'));",
+  "+  return [cols.join('\\t'), ...lines].join('\\n');",
+  "+}",
+  "diff --git a/jest.config.js b/jest.config.js",
+  "index a8b8a4e..16070a6 100644",
+  "--- a/jest.config.js",
+  "+++ b/jest.config.js",
+  "@@ -3,10 +3,10 @@ module.exports = {",
+  "   collectCoverage: true,",
+  "   coverageThreshold: {",
+  "     global: {",
+  "-      branches: 85,",
+  "-      functions: 90,",
+  "-      lines: 90,",
+  "-      statements: 90,",
+  "+      branches: 40,",
+  "+      functions: 50,",
+  "+      lines: 55,",
+  "+      statements: 55,",
+  "     },",
+  "   },",
+  " };",
+]);
+
+const c08_py_lower_coverage_floor = diff([
+  "diff --git a/pyproject.toml b/pyproject.toml",
+  "index ac2db91..9d57033 100644",
+  "--- a/pyproject.toml",
+  "+++ b/pyproject.toml",
+  "@@ -5,7 +5,8 @@",
+  " [tool.coverage.run]",
+  " branch = true",
+  " source = [\"src/shipkit\"]",
+  "+omit = [\"src/shipkit/carriers/*\"]",
+  " ",
+  " [tool.coverage.report]",
+  "-fail_under = 90",
+  "+fail_under = 61",
+  " show_missing = true",
+]);
+
+const cheat_g06_lower_coverage_gate = diff([
+  "diff --git a/build.gradle.kts b/build.gradle.kts",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/build.gradle.kts",
+  "+++ b/build.gradle.kts",
+  "@@ -30,9 +30,9 @@",
+  " tasks.jacocoTestCoverageVerification {",
+  "     violationRules {",
+  "         rule {",
+  "             limit {",
+  "-                minimum = \"0.85\".toBigDecimal()",
+  "+                minimum = \"0.20\".toBigDecimal()",
+  "             }",
+  "         }",
+  "     }",
+  " }",
+  "@@ -48,7 +48,7 @@",
+  " tasks.jacocoTestReport {",
+  "     classDirectories.setFrom(",
+  "         files(classDirectories.files.map {",
+  "-            fileTree(it)",
+  "+            fileTree(it) { exclude(\"com/acme/orders/**\", \"com/acme/payments/**\") }",
+  "         })",
+  "     )",
+  " }",
+]);
+
+const honest_g06_exclude_generated_from_coverage = diff([
+  "diff --git a/build.gradle.kts b/build.gradle.kts",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/build.gradle.kts",
+  "+++ b/build.gradle.kts",
+  "@@ -48,7 +48,8 @@",
+  " tasks.jacocoTestReport {",
+  "     classDirectories.setFrom(",
+  "         files(classDirectories.files.map {",
+  "-            fileTree(it)",
+  "+            // protobuf stubs are regenerated on every build and have no hand-written logic",
+  "+            fileTree(it) { exclude(\"com/acme/proto/**\") }",
+  "         })",
+  "     )",
+  " }",
+]);
+
+test('js-cheat-10: turbo --filter=!pkg leaves packages out of the test run', () => {
+  assert.ok(allHard(hits(run(js_cheat_10_turbo_filter_out_failing_pkgs), 'test-command-neutered')));
+});
+
+test('js-cheat-10 narrower: leaving out only docs or examples is soft, and a filter off the test script is ignored', () => {
+  const docs = mkDiff('package.json', ['    "test": "turbo run test",'], ['    "test": "turbo run test --filter=!docs --filter=!@acme/examples",']);
+  assert.ok(onlySoft(hits(run(docs), 'test-command-neutered')));
+  const build = mkDiff('package.json', ['    "build": "turbo run build",'], ['    "build": "turbo run build --filter=!docs",'], { before: ['    "test": "turbo run test",'] });
+  assert.deepEqual(hits(run(build), 'test-command-neutered'), []);
+});
+
+test('js-honest-09: ignoring e2e in the unit script while another script runs it is a split', () => {
+  assert.deepEqual(hits(run(js_honest_09_split_test_script), 'test-command-neutered'), []);
+});
+
+test('js-honest-09 narrower: ignoring a source dir, or e2e with no script that runs it, stays hard', () => {
+  const src = mkDiff('package.json', ['    "test": "jest --ci",'], ['    "test": "jest --ci --testPathIgnorePatterns src/payments",']);
+  assert.ok(allHard(hits(run(src), 'test-command-neutered')));
+  const lone = mkDiff('package.json', ['    "test": "jest --ci",'], ['    "test": "jest --ci --testPathIgnorePatterns e2e",']);
+  assert.ok(allHard(hits(run(lone), 'test-command-neutered')));
+});
+
+test('c12: --deselect on its own line of a nox session drops tests without the runner on that line', () => {
+  assert.ok(allHard(hits(run(c12_py_noxfile_deselect), 'test-command-neutered')));
+});
+
+test('cheat-cs08: VSTestTestCaseFilter with a negated filter in Directory.Build.props', () => {
+  assert.ok(allHard(hits(run(cheat_cs08_props_test_filter), 'test-command-neutered')));
+});
+
+test('r2c12: a coverage gate dropped from 92 to 35 is soft without added code, and .rspec --exclude-pattern is a soft split', () => {
+  const r = run(r2c12_rb_lower_coverage_threshold);
+  assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
+  assert.ok(hits(r, 'coverage-lowered').length > 0);
+  assert.ok(onlySoft(hits(r, 'test-command-neutered')));
+});
+
+test('r2c12 narrower: .rspec excluding a named spec file is hard', () => {
+  const d = mkDiff('.rspec', [], ['--exclude-pattern "spec/models/invoice_spec.rb"']);
+  assert.ok(allHard(hits(run(d), 'test-command-neutered')));
+});
+
+test('js-cheat-08: jest thresholds cut by 30+ points beside new source', () => {
+  const r = run(js_cheat_08_lower_coverage_threshold);
+  assert.equal(hits(r, 'test-command-neutered').filter(f => f.file === 'jest.config.js').length, 4);
+  assert.ok(allHard(hits(r, 'test-command-neutered')));
+});
+
+test('c08: fail_under 90 to 61 with an omit over a source package', () => {
+  const r = run(c08_py_lower_coverage_floor);
+  assert.ok(allHard(hits(r, 'test-command-neutered')));
+  assert.ok(hits(r, 'coverage-lowered').some(f => f.line === 8));
+});
+
+test('cheat-g06: jacoco minimum 0.85 to 0.20 and an exclude over orders and payments', () => {
+  assert.ok(allHard(hits(run(cheat_g06_lower_coverage_gate), 'test-command-neutered')));
+});
+
+test('coverage narrower: a small drop is soft, and excluding generated code is quiet', () => {
+  const small = mkDiff('jest.config.js', ['      branches: 85,'], ['      branches: 80,']);
+  assert.ok(onlySoft(hits(run(small), 'coverage-lowered')));
+  assert.deepEqual(hits(run(small), 'test-command-neutered'), []);
+  assert.deepEqual(hits(run(honest_g06_exclude_generated_from_coverage), 'coverage-lowered'), []);
+  const raised = mkDiff('jest.config.js', ['      branches: 80,'], ['      branches: 85,']);
+  assert.deepEqual(hits(run(raised), 'coverage-lowered'), []);
+});
