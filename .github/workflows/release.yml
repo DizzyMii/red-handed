@@ -23,7 +23,10 @@ jobs:
       - run: npm test
       - name: Check the tag matches package.json
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      - run: npm publish --access public
+      - name: Publish unless this version is already on npm
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if npm view "red-handed@$v" version >/dev/null 2>&1; then echo "red-handed@$v is already published"; else npm publish --access public; fi
       - name: Move the major tag the Action snippet uses
         run: |
           major="v$(node -p "require('./package.json').version.split('.')[0]")"
