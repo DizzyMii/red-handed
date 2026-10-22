@@ -88,7 +88,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   height: 64px; border-bottom: 2px solid var(--line);
 }
 .mark { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; text-decoration: none; }
-.mark .sq { width: 16px; height: 16px; background: var(--red); display: inline-block; }
+.mark .logo { display: block; width: auto; height: 20px; }
 .top nav { display: flex; gap: 28px; font-size: 15px; font-weight: 500; }
 .top nav a { text-decoration: none; }
 .top nav a:hover { text-decoration: underline; }
