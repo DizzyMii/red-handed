@@ -117,7 +117,7 @@ function renderDiff(diffText, findings) {
     }
     view.append(box);
   }
-  if (shown > 600) view.append(el('p', 'dv-more', 'The rest of the diff is not shown here. The scan read all of it.'));
+  if (shown > 600) view.append(el('p', 'dv-more', 'Only the first 600 lines are shown here, the scan read all of it.'));
   $('diffbox').hidden = files.length === 0;
   $('diff-sum').textContent = `The diff it scanned, ${plural(total, 'line')}`;
 }
@@ -212,7 +212,7 @@ function render(result, ms, diffText, ctx) {
 
   const notes = result.notes.filter(n => !/config not read/.test(n));
   $('notes').textContent = notes.length ? `note: ${notes.join('; ')}` : '';
-  // Only the verdict line is announced, not every finding.
+  // Screen readers only hear the verdict line.
   $('sr').textContent = `${v}. ${result.findings.length ? `${h} hard and ${s} soft findings.` : 'No findings.'}`;
 }
 

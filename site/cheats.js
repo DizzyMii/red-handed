@@ -25,7 +25,7 @@ export const CHEATS = [
     id: 'skip',
     claim: "Parked the HALF test for now.",
     label: 'Skipped the failing test',
-    note: 'One keyword and the red test goes away.',
+    note: '.skip on the HALF test so it stops going red.',
     diff: `diff --git a/test/cart.test.js b/test/cart.test.js
 --- a/test/cart.test.js
 +++ b/test/cart.test.js
@@ -90,7 +90,7 @@ export const CHEATS = [
     id: 'delete',
     claim: "Removed a redundant test file.",
     label: 'Deleted the test file',
-    note: 'No test, no failure.',
+    note: 'Removes test/discount.test.js and the one SAVE10 test in it.',
     diff: `diff --git a/test/discount.test.js b/test/discount.test.js
 deleted file mode 100644
 --- a/test/discount.test.js
@@ -151,7 +151,7 @@ diff --git a/test/checkout.test.js b/test/checkout.test.js
     id: 'honest',
     claim: "Discount is a percentage of the subtotal now.",
     label: 'Actually fixed the bug',
-    note: 'discount() returned the percent, not the amount. Fixed, plus a new test.',
+    note: 'discount() was handing back the bare percent. Now it works out the amount off the subtotal, plus one new test.',
     honest: true,
     diff: `diff --git a/src/cart.js b/src/cart.js
 --- a/src/cart.js

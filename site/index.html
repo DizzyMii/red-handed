@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>red-handed</title>
-<meta name="description" content="red-handed reads a code change and says whether an AI coding agent cheated to make the tests pass. 27 regex checks, no AI, no API key.">
+<meta name="description" content="red-handed reads a code change and says whether an AI coding agent cheated to make the tests pass. 27 regex checks, with no model and no API key.">
 <meta name="color-scheme" content="light dark">
 <link rel="canonical" href="https://dizzymii.github.io/red-handed/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="red-handed">
 <meta property="og:title" content="red-handed: All tests pass. Sure they do.">
-<meta property="og:description" content="Reads a code change and says whether an AI coding agent cheated to make the tests pass. 27 regex checks, no AI, no API key. Try it in the page.">
+<meta property="og:description" content="Reads a code change and says whether an AI coding agent cheated to make the tests pass. 27 regex checks, with no model and no API key. You can try it right in the page.">
 <meta property="og:url" content="https://dizzymii.github.io/red-handed/">
 <meta property="og:image" content="https://dizzymii.github.io/red-handed/og.png">
 <meta property="og:image:width" content="1200">
@@ -47,7 +47,7 @@
   <h1 id="h">All tests pass.<br><span class="red">Sure they do.</span></h1>
   <div class="lede">
     <p>red-handed reads a code change and tells you if an AI coding agent got the tests green by cheating. A test that got skipped. An expected value bent to match the bug.</p>
-    <p>The checks are fixed regexes over the added and removed lines. There is no model in the loop and no API key.</p>
+    <p>The checks are fixed regexes over the added and removed lines, there's no model in the loop and no API key.</p>
   </div>
   <div class="hero-cmd-wrap">
     <div class="hero-cmd">
@@ -74,7 +74,7 @@
 <section class="stats wrap" aria-label="Numbers">
   <div class="stat-big"><span class="num">3</span><span class="cap">CAUGHT in 111 merged PRs, and all 3 were real</span></div>
   <div class="stat-text">
-    <p class="field-test">I ran it over 111 pull requests recently merged into React, Next.js, VS Code, Django, Kubernetes, Rails and six other big projects. It said CAUGHT three times and each one really did cut test coverage: a revert took its tests with it, a flaky check got deleted, an assertion got wrapped in a try. All three had a reason and a maintainer's sign-off, which is fine. Somebody looked, and that's the job. On 16 PRs opened by AI agents it flagged nothing, correctly.</p>
+    <p class="field-test">I ran it over 111 pull requests recently merged into React, Next.js, VS Code, Django, Kubernetes, Rails and six other big projects. It said CAUGHT three times and each one really did cut test coverage. A revert took its tests with it and a flaky check got deleted (the third wrapped an assertion in a try). All three had a reason and a maintainer's sign-off, which is fine, somebody looked. On 16 PRs opened by AI agents it said CLEAN every time, which was right.</p>
     <p class="field-note">It misses things. On 92 made-up diffs, written by AI agents that couldn't see the rules and measured before I tuned anything, it flagged 24 of 45 cheats and wrongly called 3 of 47 honest changes CAUGHT. If it gets yours wrong, send me the diff.</p>
     <p class="stat-small"><span id="n-rules">27</span> checks, <span id="n-split">15 hard and 12 soft</span>. No dependencies, just Node 20 and git.</p>
   </div>
@@ -85,7 +85,7 @@
   <div class="sec-head">
     <span class="idx">01</span>
     <h2 id="pg-h">Playground</h2>
-    <p class="sec-note">This runs <code>src/</code> in your browser. A pretend agent was asked to fix a failing discount test. Pick one of the things it did. The other two tabs take a public pull request or your own diff.</p>
+    <p class="sec-note">This runs <code>src/</code> in your browser. A pretend agent was asked to fix a failing discount test. Pick one of the things it did, the other two tabs take a public pull request or your own diff.</p>
   </div>
 
   <div class="instrument">
@@ -108,7 +108,7 @@
             <button type="submit" class="go">Scan</button>
           </div>
           <p class="hint">Fetched from api.github.com, 60 an hour without a login.</p>
-          <p class="hint">Examples: <button type="button" class="linkish" id="pr-example-hit">an agent PR that deletes a failing test</button> (it gives a reason and a maintainer merged it, which is the point: someone looked), <button type="button" class="linkish" id="pr-example">a small one</button></p>
+          <p class="hint">Examples: <button type="button" class="linkish" id="pr-example-hit">an agent PR that deletes a failing test</button> (it gives a reason and a maintainer merged it, so somebody did look), <button type="button" class="linkish" id="pr-example">a small one</button></p>
           <p class="msg" id="pr-msg" role="status"></p>
         </form>
       </div>
@@ -211,7 +211,7 @@ jobs:
     <p class="pull">Treat it as a smoke alarm. When it goes off, go read the lines it printed.</p>
     <div class="limits-body">
       <p>It doesn't run your tests, so it can't tell you whether they pass. The rules are regexes over added and removed lines, and a determined author can get around them: build the string <code>"te" + "st"</code> and test-detection never sees it, or move the cheat somewhere it doesn't look.</p>
-      <p>So a CLEAN means the usual tricks are absent and nothing more. Expect the odd false SOFT finding too. If you get a false HARD one, open an issue with the diff.</p>
+      <p>So CLEAN only means the usual tricks aren't in the diff. Expect the odd false SOFT finding too. If you get a false HARD one, open an issue with the diff.</p>
       <p>It doesn't send your code anywhere either, the only network call is to the GitHub API when you hand it a pull request.</p>
     </div>
   </div>
