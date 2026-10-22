@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="brand/lockup-dark.svg">
-    <img src="brand/lockup.svg" alt="red-handed" height="40">
-  </picture>
+  <img src="brand/banner.svg" alt="red-handed" height="56">
 </p>
 
 red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 27 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
