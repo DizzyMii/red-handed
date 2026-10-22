@@ -77,7 +77,9 @@ export function localSource(cwd, base) {
       const mb = git(root, ['merge-base', baseRef, 'HEAD']);
       baseSha = mb.ok ? mb.out.trim() : null;
       if (!baseSha) throw new Error(`no common ancestor between ${baseRef} and HEAD`);
-      label = `${here} vs ${baseRef} (${short(baseSha)})`;
+      // Actions passes the base as a full sha; print it short and only once.
+      const shown = /^[0-9a-f]{40}$/i.test(baseRef) ? short(baseRef) : baseRef;
+      label = shown === short(baseSha) ? `${here} vs ${shown}` : `${here} vs ${shown} (${short(baseSha)})`;
     } else {
       baseSha = git(root, ['rev-parse', 'HEAD']).out.trim();
       label = `${here}, uncommitted changes`;
