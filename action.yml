@@ -1,0 +1,78 @@
+name: red-handed
+description: Catch AI agents cheating on tests in pull requests
+branding:
+  icon: eye
+  color: red
+inputs:
+  fail-on:
+    description: 'When to fail the job: caught, suspicious or never'
+    default: caught
+  comment:
+    description: 'Post or update a comment on the pull request'
+    default: 'true'
+  base:
+    description: 'Base ref or sha to compare against (defaults to the pull request base)'
+    default: ''
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
+      run: |
+        set +e
+        node "$GITHUB_ACTION_PATH/bin/red-handed.mjs" --base "$BASE" --format markdown > "$RUNNER_TEMP/red-handed.md"
+        code=$?
+        node "$GITHUB_ACTION_PATH/bin/red-handed.mjs" --base "$BASE" --no-color
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        cat "$RUNNER_TEMP/red-handed.md" >> "$GITHUB_STEP_SUMMARY"
+        exit 0
+
+    - if: inputs.comment == 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        CODE: ${{ steps.scan.outputs.code }}
+      run: |
+        if [ "$CODE" = "2" ] || [ ! -s "$RUNNER_TEMP/red-handed.md" ]; then
+          echo "No report to post."
+          exit 0
+        fi
+        ids=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- red-handed -->")) | .id')
+        id=$(echo "$ids" | head -n 1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/red-handed.md" > /dev/null \
+            || echo "::warning::Could not update the red-handed comment (pull requests from forks get a read-only token)."
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/red-handed.md" > /dev/null \
+            || echo "::warning::Could not post the red-handed comment (pull requests from forks get a read-only token)."
+        fi
+
+    - shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        CODE: ${{ steps.scan.outputs.code }}
+      run: |
+        case "$FAIL_ON" in
+          caught|suspicious|never) ;;
+          *) echo "::error::fail-on must be caught, suspicious or never, got '$FAIL_ON'"; exit 1 ;;
+        esac
+        if [ "$CODE" = "2" ]; then
+          echo "::error::red-handed could not scan this change, see the scan step log"
+          exit 1
+        fi
+        if [ "$FAIL_ON" = "never" ]; then
+          exit 0
+        fi
+        if [ "$CODE" = "1" ]; then
+          echo "::error::red-handed caught this change cheating"
+          exit 1
+        fi
+        if [ "$FAIL_ON" = "suspicious" ] && grep -q "red-handed: SUSPICIOUS" "$RUNNER_TEMP/red-handed.md"; then
+          echo "::error::red-handed found suspicious changes"
+          exit 1
+        fi
+        exit 0
