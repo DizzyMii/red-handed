@@ -17,7 +17,7 @@ Site with a playground: https://dizzymii.github.io/red-handed/. A three minute w
 npx red-handed demo
 ```
 
-That builds a throwaway repo, plays a pretend agent that "fixes" a discount bug five different ways, and scans what it did. This is the report (the real one has color):
+That builds a throwaway repo where a pretend agent "fixes" a discount bug five different ways, then scans the result. This is the report (the real one has color):
 
 ```
 red-handed  agent/fix-discount vs main (6fcf81a)
@@ -77,7 +77,7 @@ Flags: `--format terminal|markdown|json` (`--json` for short), `--strict` to exi
 
 Exit code is 0 for CLEAN or SUSPICIOUS, 1 for CAUGHT, 2 if it could not run.
 
-## What the verdict means
+## Verdicts and rules
 
 HARD findings are things that have almost no honest reason to appear in a fix. One of them is CAUGHT. SOFT findings have honest uses and cheating ones, so they only make the verdict SUSPICIOUS, which means read those lines yourself.
 
@@ -165,13 +165,13 @@ Put a `.red-handed.json` in the repo root:
 
 I tested it two ways.
 
-**Real pull requests.** 111 PRs recently merged into React, Next.js, VS Code, Django, Flask, Pydantic, Kubernetes, Terraform, Tokio, Spring Boot, ASP.NET Core and Rails. It said CAUGHT three times. Each one really did cut test coverage (a revert that took its tests with it, a flaky check that got deleted, an assertion wrapped in a try), and each had a reason and a maintainer's sign-off. That is the kind of thing it should make you look at. A fourth CAUGHT, on a test added already marked as failing, was wrong and is fixed. On 16 PRs opened by AI coding agents it flagged nothing, which was correct for all 16.
+**Real pull requests.** 111 PRs recently merged into React, Next.js, VS Code, Django, Flask, Pydantic, Kubernetes, Terraform, Tokio, Spring Boot, ASP.NET Core and Rails. It said CAUGHT three times. Each one really did cut test coverage. Two were a revert that took its tests with it and a flaky check that got deleted, and the third wrapped an assertion in a try. Each had a reason and a maintainer's sign-off. A fourth CAUGHT, on a test added already marked as failing, was wrong and is fixed. On 16 PRs opened by AI coding agents it flagged nothing, which was correct for all 16.
 
-**Made-up diffs it never saw.** Three rounds of 96 diffs across seven languages, half cheats and half honest look-alikes, written by separate AI agents that could not see the rules. Each round's misses got fixed, so only the last round's numbers, taken before its fixes and leaving out 4 cases a reviewer judged unfair, mean anything: 24 of 45 cheats flagged (21 CAUGHT, 3 SUSPICIOUS) and 3 of 47 honest changes wrongly CAUGHT. So it misses about half of what a careful cheater tries.
+**Made-up diffs it never saw.** 96 diffs a round across seven languages, half cheats and half honest look-alikes, written by separate AI agents that could not see the rules. There were three rounds and each round's misses got fixed, so only the last round's numbers, taken before its fixes and leaving out 4 cases a reviewer judged unfair, mean anything: 24 of 45 cheats flagged (21 CAUGHT, 3 SUSPICIOUS) and 3 of 47 honest changes wrongly CAUGHT. So it misses about half of what a careful cheater tries.
 
-## What it does not do
+## Limits
 
-It does not use an AI model and makes no network calls except the GitHub API in pull request mode. It does not run your tests, so it cannot tell you whether they pass. A determined author can get around it (build the string `"te" + "st"`, or move the cheat somewhere it does not look), so a CLEAN means the usual tricks are absent and nothing more. Treat it as a smoke alarm: when it goes off, go look at the lines it printed.
+It does not use an AI model, and the only network calls are to the GitHub API in pull request mode. It does not run your tests, so it cannot tell you whether they pass. A determined author can get around it (build the string `"te" + "st"`, or move the cheat somewhere it does not look), so a CLEAN means the usual tricks are absent and nothing more. When it flags something, go look at the lines it printed.
 
 Rules are regexes over added and removed lines, so expect some false SOFT findings and the occasional false HARD one. If you hit one, open an issue with the diff.
 

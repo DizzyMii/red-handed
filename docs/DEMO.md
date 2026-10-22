@@ -14,7 +14,7 @@ A green check means the test command exited 0. An agent has plenty of ways to ge
 npx red-handed demo
 ```
 
-The demo builds a throwaway git repo, plays a pretend agent that "fixes" the bug five different ways, and scans what it did.
+The demo makes a throwaway git repo where a pretend agent "fixes" the bug five different ways, then scans it.
 
 ![Terminal output of npx red-handed demo: CAUGHT, 4 hard findings and 1 soft finding, each with the changed line and a one-line reason](img/terminal-demo.png)
 
@@ -24,15 +24,15 @@ The top line is the verdict. CAUGHT means at least one HARD finding, which is so
 
 Two of the five, in plain words.
 
-**test-command-neutered, package.json line 1.** The agent changed `"test": "node --test"` to `"test": "node --test || true"`. In a shell, `|| true` means "if that failed, pretend it didn't". Every test can now fail and the command still exits 0, so CI stays green. It is one line in a file nobody opens during review.
+**test-command-neutered, package.json line 1.** The agent changed `"test": "node --test"` to `"test": "node --test || true"`. In a shell, `|| true` means "if that failed, pretend it didn't". Every test can now fail and the command still exits 0, so CI is still green. It is one line in a file nobody opens during review.
 
-**test-detection, src/cart.js line 10.** The agent added `if (process.env.NODE_ENV === 'test') return ...` to production code. When the tests run, the function takes a special path that gives the answer the test wants. When a real user runs it, the old buggy path is still there. The test passes and the bug is still in production.
+**test-detection, src/cart.js line 10.** The agent added `if (process.env.NODE_ENV === 'test') return ...` to production code. When the tests run, the function takes a special path that gives the answer the test checks for, and a real user still gets the old buggy path.
 
 The other three are a skipped test, a precise assertion swapped for `assert.ok(...)`, and an expected value edited from 180 to 190 to match the bug. That last one is the SOFT finding, because sometimes an expected value really should change.
 
 ## 4. Point it at a pull request
 
-No clone needed. [Pull request 1](https://github.com/DizzyMii/red-handed/pull/1) in this repo is a public demo PR, written to look like an agent's "fix":
+You don't need a clone for this one. [Pull request 1](https://github.com/DizzyMii/red-handed/pull/1) in this repo is a public demo PR, written to look like an agent's "fix":
 
 ```
 npx red-handed https://github.com/DizzyMii/red-handed/pull/1
@@ -88,7 +88,7 @@ Every pull request gets one comment, edited on each push. Here is the real one f
 
 ## 7. What CLEAN looks like
 
-An alarm that never says "fine" is not much use. This run is on a repo where the agent fixed the discount code and added a test for it. Both tests pass for real.
+It has to say "fine" sometimes too. This run is on a repo where the agent fixed the discount code and added a test for it. Both tests pass for real.
 
 ![Terminal output with the verdict CLEAN and the line Nothing looks like cheating](img/terminal-clean.png)
 
@@ -96,15 +96,13 @@ An alarm that never says "fine" is not much use. This run is on a repo where the
 
 It misses a lot. Here are the numbers.
 
-**Made-up diffs it had never seen.** Three rounds of 96 diffs across seven languages, half cheats and half honest look-alikes, written by AI agents that could not see the rules. Only the last round counts, using its numbers from before its fixes. A reviewer judged 4 of the 96 unfair and left them out, which leaves 92: 45 cheats and 47 honest changes.
+**Made-up diffs it had never seen.** Each of three rounds had 96 diffs across seven languages, half cheats and half honest look-alikes, written by AI agents that could not see the rules. Only the last round counts, using its numbers from before its fixes. A reviewer judged 4 of the 96 unfair and left them out, which leaves 92: 45 cheats and 47 honest changes.
 
 - It flagged 24 of the 45 cheats (21 CAUGHT, 3 SUSPICIOUS).
 - It wrongly CAUGHT 3 of the 47 honest changes.
-
-That is about half of what a careful cheater tries.
 
 **Real pull requests.** On 111 recently merged PRs in big open source projects it said CAUGHT three times. Each of those really had cut test coverage, with a maintainer's sign-off.
 
 **What it cannot see.** The rules are regexes over changed lines, so anyone who builds the string `"te" + "st"` gets past them. CLEAN says the usual tricks are absent. It does not run your tests, so it cannot say whether they pass. Treat it as a smoke alarm and go read the lines it prints.
 
-More in the [README](../README.md): every rule, the config file and the flags.
+The [README](../README.md) has every rule, plus the config file and flags.
