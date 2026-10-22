@@ -1,7 +1,7 @@
 // Terminal screenshot maker: node scripts/shoot-terminal.mjs --out docs/img/x.png --title '$ npx red-handed demo' -- <command...>
 // Runs the command with FORCE_COLOR=1, turns the ANSI output into HTML, wraps it in a dark
 // terminal window and screenshots it with headless Chrome at 2x. No dependencies.
-// Options: --cwd <dir>  --width <px> (default 980)  --env KEY=VAL (repeatable)  --chrome <path>
+// Options: --cwd <dir>  --env KEY=VAL (repeatable)  --chrome <path>
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -9,10 +9,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+// One warm palette for every terminal image. Red is the brand red lifted for a dark background.
+export const THEME = { bg: '#141412', bar: '#1b1b18', line: '#3a3934', text: '#f3f0e8', muted: '#8a867c', red: '#ff6b57', redBlock: '#cc1a0a', green: '#7fd08a', yellow: '#e8b64c', ink: '#141412' };
 const PALETTE = {
-  30: '#45475a', 31: '#f7768e', 32: '#9ece6a', 33: '#e0af68', 34: '#7aa2f7', 35: '#bb9af7', 36: '#7dcfff', 37: '#c0caf5',
-  90: '#6b7089', 91: '#ff899d', 92: '#b9f27c', 93: '#ffc777', 94: '#89b4fa', 95: '#cba6f7', 96: '#8ad6ff', 97: '#ffffff',
+  30: '#5a5850', 31: THEME.red, 32: THEME.green, 33: THEME.yellow, 34: '#8ab4f8', 35: '#c9a0e8', 36: '#7fd0c8', 37: THEME.text,
+  90: '#6f6c63', 91: THEME.red, 92: THEME.green, 93: THEME.yellow, 94: '#8ab4f8', 95: '#c9a0e8', 96: '#7fd0c8', 97: '#ffffff',
 };
+export const COLS = 140; // every terminal image is this many columns wide
+export const VERDICTS = { CAUGHT: [THEME.redBlock, '#ffffff'], SUSPICIOUS: [THEME.yellow, THEME.ink], CLEAN: ['#2f8f55', '#ffffff'] };
 
 export const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -49,35 +53,38 @@ export function runsToHtml(runs) {
     if (r.color) style.push(`color:${r.color}`);
     if (r.bold) style.push('font-weight:700');
     if (r.dim) style.push('opacity:.55');
+    const v = r.bold && VERDICTS[r.text.trim()];
+    if (v) style.push(`background:${v[0]}`, `color:${v[1]}`, `box-shadow:0 0 0 .4ch ${v[0]}`);
     // U+2716 falls back to a purple color-emoji glyph on Windows, so draw the cross instead
     const t = esc(r.text).replace(/✖/g, '<svg viewBox="0 0 10 10" width="1ch" height="1em" style="vertical-align:-.12em"><path d="M1 2L9 10M9 2L1 10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>');
     return style.length ? `<span style="${style.join(';')}">${t}</span>` : t;
   }).join('');
 }
 
+const WIN_W = Math.round(COLS * 8.7 + 56 + 2 + 80);
 const FONT = `'JetBrains Mono','Cascadia Code','Cascadia Mono',Consolas,'Segoe UI Symbol','DejaVu Sans Mono',monospace`;
 
-function page({ title, command, lines, width }) {
+function page({ title, command, lines }) {
   const body = lines.map((l) => `<div class="l">${runsToHtml(l) || '&nbsp;'}</div>`).join('');
+  const mark = '<svg viewBox="0 0 16 16" width="16" height="16" style="position:absolute;left:20px;top:12px"><rect width="16" height="16" fill="#cc1a0a"/><path fill="#f3f0e8" d="M2 6H4V8H5V2H7V8H8V1H10V8H11V3H13V8H14V16H4V12H3V9H2Z"/><path fill="#cc1a0a" d="M8 10H10V12H9V14H8Z"/></svg>';
   return `<!doctype html><meta charset="utf-8"><link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
-html,body{margin:0;background:#0d0f17}
-body{padding:40px;box-sizing:border-box;width:${width + 80}px;background:radial-gradient(circle at 20% 0,#1d2036,#0d0f17 70%)}
-.win{width:${width}px;background:#16161e;border-radius:12px;border:1px solid #2a2e45;box-shadow:0 24px 60px rgba(0,0,0,.55);overflow:hidden}
-.bar{height:40px;background:#1c1d2b;display:flex;align-items:center;padding:0 16px;position:relative;border-bottom:1px solid #2a2e45}
-.dot{width:12px;height:12px;border-radius:50%;margin-right:8px}
-.ttl{position:absolute;left:0;right:0;text-align:center;font:500 13px ${FONT};color:#8b90a8}
-pre{margin:0;padding:20px 24px 24px;font:400 14.5px/1.55 ${FONT};color:#c0caf5;white-space:pre;font-variant-ligatures:none;font-feature-settings:'liga' 0,'calt' 0;font-variant-emoji:text}
-.l{min-height:1.55em}.p{color:#7aa2f7}
+html,body{margin:0;background:#0b0b0a}
+body{padding:40px;box-sizing:border-box;width:${WIN_W}px}
+.win{font:400 14.5px/1.55 ${FONT};width:calc(${COLS}ch + 56px);background:${THEME.bg};border:1px solid ${THEME.line};box-shadow:0 20px 50px rgba(0,0,0,.6);overflow:hidden}
+.bar{height:40px;background:${THEME.bar};position:relative;border-bottom:1px solid ${THEME.line}}
+.ttl{position:absolute;left:0;right:0;top:0;text-align:center;font:500 13px/40px ${FONT};color:${THEME.muted}}
+pre{margin:0;padding:20px 28px 24px;font:inherit;color:${THEME.text};white-space:pre;font-variant-ligatures:none;font-feature-settings:'liga' 0,'calt' 0;font-variant-emoji:text}
+.l{min-height:1.55em}.p{color:${THEME.red}}
 </style>
-<div class="win"><div class="bar"><i class="dot" style="background:#ff5f56"></i><i class="dot" style="background:#ffbd2e"></i><i class="dot" style="background:#27c93f"></i><div class="ttl">${esc(title)}</div></div>
+<div class="win"><div class="bar">${mark}<div class="ttl">${esc(title)}</div></div>
 <pre><div class="l"><span class="p">$</span> ${esc(command)}</div><div class="l">&nbsp;</div>${body}</pre></div>`;
 }
 
 function main() {
   const argv = process.argv.slice(2);
-  const opts = { env: {}, width: 980 };
+  const opts = { env: {} };
   let i = 0;
   for (; i < argv.length; i++) {
     const a = argv[i];
@@ -85,7 +92,6 @@ function main() {
     if (a === '--out') opts.out = argv[++i];
     else if (a === '--title') opts.title = argv[++i];
     else if (a === '--cwd') opts.cwd = argv[++i];
-    else if (a === '--width') opts.width = Number(argv[++i]);
     else if (a === '--chrome') opts.chrome = argv[++i];
     else if (a === '--env') { const [k, ...v] = argv[++i].split('='); opts.env[k] = v.join('='); }
   }
@@ -96,9 +102,8 @@ function main() {
   const title = opts.title || '$ ' + cmd.join(' ');
   const command = title.replace(/^\$ /, '');
   const longest = Math.max(...lines.map((l) => l.reduce((n, x) => n + [...x.text].length, 0)), command.length + 2);
-  // 14.5px mono is ~8.7px per column; widen the window if the output needs it
-  opts.width = Math.max(opts.width, Math.ceil(longest * 8.8) + 48);
-  const html = page({ title, command, lines, width: opts.width });
+  if (longest > COLS - 2) { console.error(`a line is ${longest} columns, the frame holds ${COLS - 2}`); process.exit(1); }
+  const html = page({ title, command, lines });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shoot-'));
   const file = path.join(tmp, 'term.html');
   fs.writeFileSync(file, html);
@@ -106,7 +111,7 @@ function main() {
   const chrome = opts.chrome || process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
   fs.mkdirSync(path.dirname(path.resolve(opts.out)), { recursive: true });
   const c = spawnSync(chrome, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${path.join(tmp, 'profile')}`,
-    '--force-device-scale-factor=2', `--window-size=${opts.width + 80},${H}`, '--virtual-time-budget=6000',
+    '--force-device-scale-factor=2', `--window-size=${WIN_W},${H}`, '--virtual-time-budget=6000',
     `--screenshot=${path.resolve(opts.out)}`, pathToFileURL(file).href], { encoding: 'utf8' });
   fs.rmSync(tmp, { recursive: true, force: true });
   if (!fs.existsSync(path.resolve(opts.out))) { console.error(c.error || c.stderr || c.status); process.exit(1); }
