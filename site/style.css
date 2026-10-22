@@ -90,7 +90,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .mark { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; text-decoration: none; }
 .mark .logo { display: block; width: auto; height: 28px; }
 .lg-r { fill: var(--red); }
-@media (prefers-color-scheme: dark) { .lg-r { fill: var(--red-t); } }
+.lg-a { fill: #ff5a43; }
+@media (prefers-color-scheme: dark) { .lg-r, .lg-a { fill: var(--red-t); } }
 .top nav { display: flex; gap: 28px; font-size: 15px; font-weight: 500; }
 .top nav a { text-decoration: none; }
 .top nav a:hover { text-decoration: underline; }

@@ -83,7 +83,7 @@ lines.forEach((runs, i) => {
   body.push(`<text class="${n}" x="${X0}" y="${y(row)}" textLength="${+([...text].length * CW).toFixed(1)}" lengthAdjust="spacing" xml:space="preserve">${runText(runs)}</text>${extra}`);
 });
 
-const mark = `<g transform="translate(20 12)"><rect width="16" height="16" fill="#cc1a0a"/><path fill="#f3f0e8" d="M2 6H4V8H5V2H7V8H8V1H10V8H11V3H13V8H14V16H4V12H3V9H2Z"/><path fill="#cc1a0a" d="M8 10H10V12H9V14H8Z"/></g>`;
+const mark = `<g transform="translate(20 12)"><rect width="16" height="16" rx="3.5" fill="#f3f0e8"/><path fill="#141414" d="M4 3H7V13H4Z"/><path fill="#cc1a0a" d="M7 5C7.4 3.7 8.3 3 9.8 3H12V7H10.2C8.6 7 7.6 7.7 7 9Z"/></g>`;
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Terminal recording: npx red-handed demo catches an agent that cheated its way to passing tests. Verdict CAUGHT, 4 hard and 1 soft findings.">
 <style>
 text{font-family:'JetBrains Mono','SF Mono','Cascadia Code',Menlo,Consolas,'DejaVu Sans Mono','Liberation Mono',monospace;font-size:${FS}px;fill:${THEME.text};white-space:pre;font-variant-ligatures:none}

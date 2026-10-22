@@ -66,7 +66,7 @@ const FONT = `'JetBrains Mono','Cascadia Code','Cascadia Mono',Consolas,'Segoe U
 
 function page({ title, command, lines }) {
   const body = lines.map((l) => `<div class="l">${runsToHtml(l) || '&nbsp;'}</div>`).join('');
-  const mark = '<svg viewBox="0 0 16 16" width="16" height="16" style="position:absolute;left:20px;top:12px"><rect width="16" height="16" fill="#cc1a0a"/><path fill="#f3f0e8" d="M2 6H4V8H5V2H7V8H8V1H10V8H11V3H13V8H14V16H4V12H3V9H2Z"/><path fill="#cc1a0a" d="M8 10H10V12H9V14H8Z"/></svg>';
+  const mark = '<svg viewBox="0 0 16 16" width="16" height="16" style="position:absolute;left:20px;top:12px"><rect width="16" height="16" rx="3.5" fill="#f3f0e8"/><path fill="#141414" d="M4 3H7V13H4Z"/><path fill="#cc1a0a" d="M7 5C7.4 3.7 8.3 3 9.8 3H12V7H10.2C8.6 7 7.6 7.7 7 9Z"/></svg>';
   return `<!doctype html><meta charset="utf-8"><link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
