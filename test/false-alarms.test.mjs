@@ -791,3 +791,29 @@ test('speed_fp2_big_rewrite: 3000 rewritten checks against 200 edited methods pa
   assert.ok(onlySoft(hits(r, 'assertion-removed')), 'every rewrite still pairs');
 });
 
+test('honest_fp1_nested_namesake_added_elsewhere: a nested record Chip in another class does not bring Chip back', () => {
+  const r = run([
+    del('src/main/java/demo/ui/Chip.java', ['package demo.ui;', '', 'public final class Chip {', '  public static int width(String label) {', '    return label.length() * 6 + 4;', '  }', '}']),
+    del('src/test/java/demo/ui/ChipTest.java', ['package demo.ui;', '', 'class ChipTest {', '  @Test', '  void widthGrowsWithLabel() {', '    assertNotNull(new Chip("a"));', '    assertEquals(16, Chip.width("ab"));', '  }', '}']),
+    mkDiff('src/main/java/demo/smith/Cues.java', [], ['  public record Chip(String glyph, int tint) {}'], { before: ['package demo.smith;', '', 'public final class Cues {'], after: ['}'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp1_top_level_namesake_added: a new top-level Chip is a move, so the test is still needed', () => {
+  const r = run([
+    del('src/main/java/demo/ui/Chip.java', ['package demo.ui;', '', 'public final class Chip {', '  public static int width(String label) {', '    return label.length() * 6 + 4;', '  }', '}']),
+    del('src/test/java/demo/ui/ChipTest.java', ['package demo.ui;', '', 'class ChipTest {', '  @Test', '  void widthGrowsWithLabel() {', '    assertEquals(10, Chip.width("a"));', '  }', '}']),
+    mkDiff('src/main/java/demo/hud/Chip.java', [], ['package demo.hud;', '', 'public final class Chip {', '  public static int width(String label) {', '    return label.length() * 6 + 4;', '  }', '}'], { status: 'added' }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('honest_fp1_method_after_nested_type: a method below a nested enum belongs to the outer class', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/ui/Gauge.java', ['  static float fill(int have, int max) {', '    return have / (float) max;', '  }'], [],
+      { before: ['package demo.ui;', 'public final class Gauge {', '  enum Mode { BAR, RING }'], after: ['}'] }),
+    mkDiff('src/test/java/demo/ui/GaugeTest.java', ['    assertEquals(0.5f, Gauge.fill(5, 10), 1e-6f);'], [], { before: ['package demo.ui;', 'class GaugeTest {', '  @Test', '  void fills() {'], after: ['  }', '}'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
