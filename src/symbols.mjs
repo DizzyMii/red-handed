@@ -41,6 +41,48 @@ export function closeOf(s, open) {
   return -1;
 }
 
+// Brackets a line opens and does not close, strings skipped.
+function openDepth(s) {
+  let depth = 0;
+  let quote = null;
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (quote) {
+      if (ch === '\\') k++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'" || ch === '`') quote = ch;
+    else if (ch === '/' && s[k + 1] === '/') break;
+    else if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+  }
+  return depth;
+}
+
+// The whole statement that starts on line `entry` of f (an added or removed line), with the lines
+// it runs on to joined in: an assertion split over two lines reads as one. A removed statement
+// goes on through removed and context lines, an added one through added and context lines.
+const joinCache = new WeakMap();
+export function statementOf(f, entry, kind) {
+  let cache = joinCache.get(f);
+  if (!cache) { cache = new Map(); joinCache.set(f, cache); }
+  const key = `${kind}${entry.hunk}:${entry.line}`;
+  if (cache.has(key)) return cache.get(key);
+  const lines = f.hunks[entry.hunk]?.lines ?? [];
+  const at = lines.findIndex(l => l.kind === kind && (kind === '-' ? l.oldLine : l.newLine) === entry.line);
+  let text = entry.text;
+  if (at >= 0 && openDepth(text) > 0) {
+    let depth = openDepth(text);
+    for (let j = at + 1, n = 0; j < lines.length && depth > 0 && n < 8; j++) {
+      if (lines[j].kind !== kind && lines[j].kind !== ' ') continue;
+      text += ' ' + lines[j].text.trim();
+      depth += openDepth(lines[j].text);
+      n++;
+    }
+  }
+  cache.set(key, text);
+  return text;
+}
+
 const countArgs = (s) => (s.trim() ? splitTop(s).length : 0);
 // Generic parameters hold commas of their own: Map<String, Integer> m is one parameter.
 const stripGenerics = (s) => { let t = s; let prev; do { prev = t; t = t.replace(/<[^<>]*>/g, ''); } while (t !== prev); return t; };

@@ -5,7 +5,7 @@ import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
 import {
-  splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature, pyModMatch,
+  splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature, pyModMatch, statementOf,
 } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
@@ -1120,6 +1120,44 @@ function dropArgs(t, name) {
 // The ref that makes removed line x and added line y one check rewritten: equal once the calls
 // whose arity changed lose their arguments and renamed names take the new name, or equal up to
 // the expected value when the change edits code the line calls (not when `exact`). Null when there is none.
+// The && parts of a yes-or-no check, message already dropped: assertTrue(a && b), helper.assertTrue(a && b),
+// expect(a && b).toBe(true), assert a and b. Null for any other shape.
+function conjuncts(t) {
+  let head;
+  let cond;
+  const call = /^((?:[\w$]+\.)?assert(?:True)?)\s*\(/.exec(t);
+  if (call) {
+    const close = closeOf(t, call[0].length - 1);
+    if (close < 0) return null;
+    const args = splitTop(t.slice(call[0].length, close));
+    if (args.length !== 1) return null;
+    head = call[1] + t.slice(close);
+    cond = args[0];
+  } else {
+    const py = /^assert\s+(.+?)\s*$/.exec(t);
+    if (!py || /,/.test(py[1].replace(STRING_LITERAL, ''))) return null;
+    head = 'assert';
+    cond = py[1];
+  }
+  const parts = [];
+  let depth = 0;
+  let cur = '';
+  // Strings are set aside first, so an && inside one does not split the check.
+  const strs = [];
+  const s = cond.replace(STRING_LITERAL, (x) => { strs.push(x); return `\u0000${strs.length - 1}\u0000`; }).replace(/\s+and\s+/g, ' && ');
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    if (depth === 0 && s.startsWith('&&', k)) { parts.push(cur.trim()); cur = ''; k++; continue; }
+    if (depth === 0 && s.startsWith('||', k)) return null;
+    cur += ch;
+  }
+  parts.push(cur.trim());
+  const back = (x) => x.replace(/\u0000(\d+)\u0000/g, (m, n) => strs[+n]);
+  return parts.every(Boolean) ? { head, parts: parts.map(back) } : null;
+}
+
 // Worked out once per removed line, before any candidate is looked at: `tx` applies the arity and
 // rename normalisations (null when there are none), `why` is the ref behind them, and `changed` is
 // the ref whose code this change edits, which allows a match up to the expected value.
@@ -1161,6 +1199,16 @@ function pairRewrites(ctx, f, removed, added) {
   const same = new Map();
   for (const r of removed) {
     const a = byDistance(r, exactKeys.get(msgless(r.text)) ?? [])[0];
+    if (a) { free.delete(a); same.set(r, a); }
+  }
+  // A check that now asks for everything it asked before and more ("x == 0" became
+  // "x == 0 && said(...)") is stronger, so it is the same check kept.
+  const conj = new Map(added.map(a => [a, conjuncts(msgless(a.text))]));
+  for (const r of removed) {
+    if (same.has(r)) continue;
+    const c = conjuncts(msgless(r.text));
+    if (!c) continue;
+    const a = byDistance(r, added).find(x => { const d = conj.get(x); return d && d.head === c.head && d.parts.length > c.parts.length && c.parts.every(p => d.parts.includes(p)); });
     if (a) { free.delete(a); same.set(r, a); }
   }
   const idx = sourceIndex(ctx);
@@ -1541,7 +1589,9 @@ export const RULES = [
       if (f.status === 'deleted') continue;
       const scope = testScope(ctx, f);
       if (!scope) continue;
-      const lost = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r) && !errGuardDropped(f, r));
+      // Each check read as its whole statement, so one split over two lines is judged as one.
+      const lost = scope.removed.filter(r => isAssertLine(r.text) && !ctx.allAddedTrimmed.has(r.text.trim()) && !movedAway(f, r) && !errGuardDropped(f, r))
+        .map(r => ({ ...r, text: statementOf(f, r, '-') }));
       // An assertion on code this change deletes went with its feature. That is also what a cheat
       // dressed as a removal looks like, so it stays on the page as SOFT and out of the count.
       const removed = [];
@@ -1552,7 +1602,7 @@ export const RULES = [
       }
       // A check rewritten to the code's new shape pairs with its new form and drops out of the count.
       // An honest API change and a test bent to fit a bug look the same, so the pair stays as SOFT.
-      const added = scope.added.filter(a => isAssertLine(a.text));
+      const added = scope.added.filter(a => isAssertLine(a.text)).map(a => ({ ...a, text: statementOf(f, a, '+') }));
       const { same, pairs, addedLeft } = pairRewrites(ctx, f, removed, added);
       for (const [r, { a, ref }] of pairs) {
         add(pathOf(f), r.line, r.text, a.text, `This assertion was rewritten in the same change that changed ${ref.name} in ${ref.file}. That is how an honest API change looks, and also how a test gets bent to fit a bug, so red-handed flags it for review instead of failing it.`, true);
