@@ -250,19 +250,29 @@ export function sourceIndex(ctx) {
     const lang = language(path);
     const rec = { f, path, lang, mod: modKey(path), pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null };
     records.push(rec);
-    let owner = stemOfPath(path);
+    // The types that enclose a line, by indent: a method after a nested enum belongs to the class
+    // around both, not to the enum. A hunk that does not show the enclosing type falls back to the stem.
+    const stem = stemOfPath(path);
+    const types = [];
     f.hunks.forEach((h, hunk) => {
       const inHunk = [];
       hunkDecls.set(h, inHunk);
       for (const l of h.lines) {
-        for (const d of declarationsOn(l.text, lang)) {
-          if (d.kind === 'type' && OVERLOADS.has(lang)) owner = d.name;
-          const decl = { ...d, side: l.kind, hunk, rec, top: !/^\s/.test(l.text), owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
+        const found = declarationsOn(l.text, lang);
+        if (!found.length) continue;
+        const ind = /^\s*/.exec(l.text)[0].length;
+        while (types.length && types[types.length - 1].ind >= ind) types.pop();
+        const owner = types.length ? types[types.length - 1].name : stem;
+        for (const d of found) {
+          const decl = { ...d, side: l.kind, hunk, rec, top: ind === 0, outer: types[0]?.name ?? stem,
+            owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
           decls.push(decl);
           inHunk.push(decl);
           if (!byName.has(decl.name)) byName.set(decl.name, []);
           byName.get(decl.name).push(decl);
         }
+        const t = OVERLOADS.has(lang) && found.find(d => d.kind === 'type');
+        if (t) types.push({ ind, name: t.name });
       }
     });
   }
@@ -285,7 +295,9 @@ export function sourceIndex(ctx) {
   };
   const named = (name) => byName.get(name) ?? [];
   const fitsArity = (d, arity) => arity == null || d.arity == null || !OVERLOADS.has(d.rec.lang) || d.arity === arity;
-  const plusNames = new Set(decls.filter(d => d.side === '+').map(d => d.name));
+  // A deleted type is back only when some file adds a top-level type of that name. A nested
+  // record Chip inside another class is not the deleted Chip moving.
+  const plusNames = new Set(decls.filter(d => d.side === '+' && d.top).map(d => d.name));
   const minusNames = new Set(decls.filter(d => d.side === '-').map(d => d.name));
 
   const deletedSources = records.filter(r => r.f.status === 'deleted').map(r => {
