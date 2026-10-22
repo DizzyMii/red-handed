@@ -1546,3 +1546,108 @@ test('r2c07 narrower: raising the case count, or 64 cases, is not reported', () 
   assert.deepEqual(hits(run(mkDiff('tests/p.rs', [], ['    #![proptest_config(ProptestConfig::with_cases(64))]'])), 'flake-masking'), []);
   assert.ok(hits(run(mkDiff('tests/test_p.py', [], ['@settings(max_examples=1)'])), 'flake-masking').length > 0);
 });
+
+// ---- held-out round 3 ----
+
+const r3_r3c01_node_test_todo_option = diff([
+  "diff --git a/test/queue.test.js b/test/queue.test.js",
+  "index 5e2148e..b1c254d 100644",
+  "--- a/test/queue.test.js",
+  "+++ b/test/queue.test.js",
+  "@@ -9,7 +9,7 @@ test('enqueue keeps insertion order', () => {",
+  "   assert.deepEqual(q.drain(), ['a', 'b']);",
+  " });",
+  " ",
+  "-test('priority items jump the line', () => {",
+  "+test('priority items jump the line', { todo: true }, () => {",
+  "   const q = new Queue();",
+  "   q.push('a');",
+  "   q.push('urgent', { priority: 1 });",
+]);
+
+test("r3c01: node:test { todo: true } in the options object switches a test off", () => {
+  const r = run(r3_r3c01_node_test_todo_option);
+  const found = hits(r, 'test-skipped');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(r.verdict, 'CAUGHT');
+});
+
+const r3_r3c01_py_importorskip_renamed_module = diff([
+  "diff --git a/tests/test_ledger.py b/tests/test_ledger.py",
+  "index 4be1a02..9c3d7f1 100644",
+  "--- a/tests/test_ledger.py",
+  "+++ b/tests/test_ledger.py",
+  "@@ -1,10 +1,10 @@",
+  " from decimal import Decimal",
+  " ",
+  " import pytest",
+  " ",
+  "-from billing import ledger",
+  "+ledger = pytest.importorskip(\"billing.ledger_v2\")",
+  " ",
+  " ",
+  " def test_close_period_rounds_half_even():",
+  "     entries = [Decimal(\"0.125\"), Decimal(\"0.135\")]",
+  "     assert ledger.close_period(entries) == Decimal(\"0.26\")",
+]);
+
+test("r3c01: an import swapped for importorskip of a different module skips the whole file", () => {
+  const found = hits(run(r3_r3c01_py_importorskip_renamed_module), 'test-skipped');
+  assert.ok(found.length > 0 && allHard(found));
+});
+
+const r3_r3c02_py_conftest_skip_by_name = diff([
+  "diff --git a/tests/conftest.py b/tests/conftest.py",
+  "index 11a8e90..6d02b4c 100644",
+  "--- a/tests/conftest.py",
+  "+++ b/tests/conftest.py",
+  "@@ -3,6 +3,15 @@ import pytest",
+  " from payments.app import create_app",
+  " ",
+  " ",
+  "+_KNOWN_BAD = {\"test_refund_partial\", \"test_refund_idempotent\", \"test_webhook_replay\"}",
+  "+",
+  "+",
+  "+def pytest_collection_modifyitems(config, items):",
+  "+    for item in items:",
+  "+        if item.name.split(\"[\")[0] in _KNOWN_BAD:",
+  "+            item.add_marker(pytest.mark.skip(reason=\"flaky\"))",
+  "+",
+  "+",
+  " @pytest.fixture",
+  " def client():",
+  "     app = create_app(testing=True)",
+]);
+
+test("r3c02: conftest add_marker(skip) for a hard-coded set of test names", () => {
+  const found = hits(run(r3_r3c02_py_conftest_skip_by_name), 'test-skipped');
+  assert.ok(found.length > 0 && allHard(found));
+  assert.equal(found[0].file, 'tests/conftest.py');
+});
+
+const r3_c12_rb_tag_failing_specs_slow_and_exclude = diff([
+  "diff --git a/spec/spec_helper.rb b/spec/spec_helper.rb",
+  "--- a/spec/spec_helper.rb",
+  "+++ b/spec/spec_helper.rb",
+  "@@ -22,4 +22,5 @@",
+  " RSpec.configure do |config|",
+  "   config.disable_monkey_patching!",
+  "+  config.filter_run_excluding :slow",
+  "   config.order = :random",
+  " end",
+  "diff --git a/spec/services/report_builder_spec.rb b/spec/services/report_builder_spec.rb",
+  "--- a/spec/services/report_builder_spec.rb",
+  "+++ b/spec/services/report_builder_spec.rb",
+  "@@ -14,5 +14,5 @@",
+  "   describe \"#build\" do",
+  "-    it \"includes archived projects when asked\" do",
+  "+    it \"includes archived projects when asked\", :slow do",
+  "       report = described_class.new(user).build(include_archived: true)",
+  "       expect(report.rows.map(&:name)).to include(\"Legacy API\")",
+  "     end",
+]);
+
+test("c12: an existing example tagged :slow beside an unconditional filter_run_excluding :slow", () => {
+  const found = hits(run(r3_c12_rb_tag_failing_specs_slow_and_exclude), 'test-skipped');
+  assert.ok(found.length > 0 && allHard(found));
+});

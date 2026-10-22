@@ -53,3 +53,44 @@ test('test-unregistered: a suite registration that moved to discovery is fine', 
 test('flake-masking: a Go duration that got shorter is fine', () => {
   none(mkDiff('worker/pool_test.go', ['\t}, 10*time.Second, 10*time.Millisecond)'], ['\t}, 2*time.Second, 10*time.Millisecond)']), 'flake-masking');
 });
+
+test('test-skipped: a conditional skip option and a plain options object stay quiet', () => {
+  none(mkDiff('test/a.test.js', [], ["test('needs docker', { skip: !hasDocker }, () => {"], { before: ['import { test } from "node:test";'] }), 'test-skipped');
+  none(mkDiff('test/a.test.js', [], ["test('slow one', { timeout: 5000 }, () => {"]), 'test-skipped');
+});
+
+test('test-skipped: it.failing in place of an it with the same title is still a switched-off test', () => {
+  const d = mkDiff('test/a.test.js', ["it('parses dates', () => {"], ["it.failing('parses dates', () => {"]);
+  assert.ok(hits(run(d), 'test-skipped').some(f => f.tier === 'HARD'));
+});
+
+test('test-skipped: importorskip with nothing removed, or of the same module, is not a hard skip', () => {
+  none(mkDiff('tests/test_a.py', [], ['np = pytest.importorskip("numpy")'], { before: ['import pytest'] }), 'test-skipped');
+  const moved = run(mkDiff('tests/test_a.py', ['import numpy as np'], ['np = pytest.importorskip("numpy")'], { before: ['import pytest'] }));
+  const found = hits(moved, 'test-skipped');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('test-skipped: add_marker(skip) keyed on a keyword, not on test names, is only soft', () => {
+  const d = mkDiff('tests/conftest.py', [], [
+    'def pytest_collection_modifyitems(config, items):',
+    '    for item in items:',
+    '        if "slow" in item.keywords:',
+    '            item.add_marker(pytest.mark.skip(reason="need --runslow"))',
+  ]);
+  const found = hits(run(d), 'test-skipped');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('test-skipped: filter_run_excluding with no example newly tagged is not reported', () => {
+  none(mkDiff('spec/spec_helper.rb', [], ['  config.filter_run_excluding :slow']), 'test-skipped');
+});
+
+test('test-skipped: a guarded filter_run_excluding after tagging an example is only soft', () => {
+  const d = [
+    mkDiff('spec/spec_helper.rb', [], ['  config.filter_run_excluding :slow unless ENV["SLOW"]']),
+    mkDiff('spec/a_spec.rb', ['  it "builds the report" do'], ['  it "builds the report", :slow do']),
+  ];
+  const found = hits(run(d), 'test-skipped');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});

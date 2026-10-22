@@ -65,7 +65,7 @@ function nextCodeLine(f, a, skip = 0) {
 
 const SKIP = {
   // The second branch is an alias made of a skip ("const itX = it.skip"); a ternary there is only a conditional skip.
-  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme|fails|failing)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\b(it|test|describe)\.skipIf\s*\(\s*process\.env\.(CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_URL|TF_BUILD)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(/,
+  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme|fails|failing)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\b(it|test|describe)\.skipIf\s*\(\s*process\.env\.(CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_URL|TF_BUILD)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(|\b(it|test|describe|suite)\s*\(\s*(?<q>['"`])(?:(?!\k<q>).)*\k<q>\s*,\s*\{[^}]*\b(skip|todo)\s*:\s*(true\b|['"`])/,
   py: /@pytest\.mark\.(skip|xfail)\b|@pytest\.mark\.skipif\s*\(\s*(True|1)\b|@unittest\.(skip|expectedFailure)\b|@unittest\.skipIf\s*\(\s*(True|1)\b|@unittest\.skipUnless\s*\(\s*(False|0)\b|\bpytest\.(skip|xfail)\s*\(|\bself\.skipTest\s*\(|\braise\s+(unittest\.)?SkipTest\b/,
   jvm: /@(Disabled|Ignore|DisabledIf\w*|Ignored)\b|\bAssumptions\.assume\w*\s*\(\s*false|\bassumeTrue\s*\(\s*false|@Test\s*\(\s*enabled\s*=\s*false|\bassumeTrue\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*==\s*null|\bassumeFalse\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*!=\s*null|^\s*if\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS)"\s*\)\s*!=\s*null\s*\)\s*\{?\s*return\s*;/,
   // PIt and XIt are ginkgo's pending markers.
@@ -317,6 +317,7 @@ const CI_VARS = 'CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_U
 const PY_CI_ENV = new RegExp(`(?<!not\\s)\\b(os\\.environ(\\.get)?|os\\.getenv)\\s*[\\(\\[]\\s*['"](${CI_VARS})['"]|(?<!not\\s)['"](CI|GITHUB_ACTIONS)['"]\\s+in\\s+os\\.environ`);
 const PY_SKIPIF = /^\s*@(pytest\.mark\.skipif|unittest\.skipIf)\s*\(/;
 const JS_TODO_TITLE = /\b(it|test)\.todo\s*\(\s*(['"`])((?:(?!\2).)*)\2\s*\)\s*;?\s*$/;
+const JS_MARKED_HEADER = /\b(it|test|describe)\.(skip|todo|fixme|fails|failing)\s*\(\s*(['"`])(.*?)\3/;
 const GO_IGNORE_TAG = /^\s*\/\/\s*(go:build|\+build)\s+.*(?<!!)\bignore\b/;
 
 const CONDITIONAL_OPENER = /^\s*(\}\s*)?(if|unless|elif|else\s+if)\b/;
@@ -363,6 +364,63 @@ function pySkipsOnCi(f, a) {
     return CONDITIONAL_OPENER.test(lines[j].text) && PY_CI_ENV.test(lines[j].text);
   }
   return false;
+}
+
+// pytest.importorskip("pkg.new") written where an import of another module of pkg used to be. The
+// same module moved behind importorskip is an optional dependency, so that one is only soft.
+const IMPORTORSKIP = /\bpytest\.importorskip\s*\(\s*['"]([\w.]+)['"]/;
+function importorskipChange(f, a) {
+  const m = IMPORTORSKIP.exec(a.text);
+  if (!m) return null;
+  const target = m[1];
+  let sameTop = false;
+  for (const l of hunkLines(f, a)) {
+    if (l.kind !== '-' || isCommentLine(l.text)) continue;
+    const from = /^\s*from\s+([\w.]+)\s+import\s+(.+?)\s*$/.exec(l.text);
+    const plain = /^\s*import\s+([\w.]+)/.exec(l.text);
+    let mods = [];
+    if (from) mods = [from[1], ...from[2].replace(/[()]/g, '').split(',').map(n => /^\s*(\w+)/.exec(n)?.[1]).filter(Boolean).map(n => from[1] + '.' + n)];
+    else if (plain) mods = [plain[1]];
+    if (mods.includes(target)) return 'soft';
+    if (mods.some(x => x.split('.')[0] === target.split('.')[0])) sameTop = true;
+  }
+  return sameTop ? 'hard' : null;
+}
+
+// item.add_marker(pytest.mark.skip(...)) in a conftest. It is a skip of named tests when the "if" above
+// compares item.name with test names; the --runslow pattern on item.keywords is a documented soft case.
+const ADD_MARKER = /\.add_marker\s*\(\s*(?:pytest\.mark\.(?:skip|xfail)\b|(\w+)\s*\))/;
+function markerSkip(f, a) {
+  const m = ADD_MARKER.exec(a.text);
+  if (!m) return null;
+  if (m[1] && !f.added.some(x => new RegExp(`\\b${m[1]}\\s*=\\s*pytest\\.mark\\.(skip|xfail)\\b`).test(x.text))) return null;
+  const { lines, i } = newSide(f, a);
+  let cond = '';
+  for (let j = i - 1; j >= 0; j--) {
+    if (!lines[j].text.trim() || isCommentLine(lines[j].text)) continue;
+    cond = lines[j].text;
+    break;
+  }
+  if (!/^\s*if\b/.test(cond) || !/\b\w+\.(name|nodeid|originalname)\b/.test(cond)) return 'other';
+  if (/['"][^'"]*\btest_\w/.test(cond)) return 'name';
+  const holder = /\bin\s+([\w.]+)/.exec(cond)?.[1];
+  if (!holder) return 'other';
+  const def = new RegExp(`^\\s*${holder.replace(/[.$]/g, '\\$&')}\\s*(:[^=]+)?=`);
+  const at = f.added.findIndex(x => def.test(x.text));
+  if (at < 0) return 'other';
+  let body = '';
+  for (let k = at, n = f.added[at].line; k < f.added.length && f.added[k].line === n && k < at + 20; k++, n++) body += f.added[k].text + '\n';
+  return /['"][^'"]*\btest_\w/.test(body) ? 'name' : 'other';
+}
+
+// An rspec example that has just been given a tag, and that this change excludes from the run.
+function newlyTagged(ctx, tag) {
+  const tagged = new RegExp(`,\\s*(?::${tag}\\b|${tag}:\\s*true)`);
+  return ctx.files.some(g => fileIsTest(ctx, g) && g.added.some(x => {
+    if (!/^\s*(it|specify|scenario|example)\b/.test(x.text) || !tagged.test(x.text)) return false;
+    const plain = collapse(x.text.replace(tagged, ''));
+    return g.removed.some(r => collapse(r.text) === plain);
+  }));
 }
 
 const STRING_LITERAL =/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g;
@@ -758,6 +816,12 @@ export const RULES = [
       } else if (!ctx.isTest(p)) continue;
       else if (lang === 'other') hit = Object.values(SKIP).some(r => r.test(a.text));
       else hit = SKIP[lang].test(a.text);
+      if (lang === 'py') {
+        const io = f.status === 'added' ? null : importorskipChange(f, a);
+        if (io) { add(p, a.line, null, a.text, undefined, io === 'soft'); continue; }
+        const named = markerSkip(f, a);
+        if (named) { add(p, a.line, null, a.text, undefined, named !== 'name'); continue; }
+      }
       if (lang === 'js') {
         // it.todo('title') next to a real test the same change adds is a placeholder for the next one.
         // It is a switched-off test when it replaces a real one, and a lone todo is still reported.
@@ -775,7 +839,28 @@ export const RULES = [
         add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a, { ci: true }));
         continue;
       }
+      if (hit && lang === 'js') {
+        // A test header that carries the marker and replaces no header of that title, in a hunk that
+        // removes nothing, is a new test. it.failing and it.fails still run it and fail on a pass.
+        // A new it.skip stays as it was: existing tests count those as switched off.
+        const born = JS_MARKED_HEADER.exec(a.text);
+        if (born && born[2] !== 'todo' && !f.removed.some(r => TEST_HEADER.test(r.text) && r.text.includes(born[4]))
+          && !hunkLines(f, a).some(l => l.kind === '-' && l.text.trim() && !isCommentLine(l.text))) {
+          if (/^(fails|failing)$/.test(born[2])) continue;
+        }
+      }
       if (hit) add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a) || (lang === 'js' && CONDITIONAL_SKIP_ALIAS.test(a.text)));
+    }
+    // filter_run_excluding :tag, with an existing example given that tag in the same change.
+    for (const { a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'rb')) {
+      const m = /\bfilter_run_excluding\s*\(?\s*(?::(\w+)|(\w+):\s*true)/.exec(a.text);
+      if (!m) continue;
+      const tag = m[1] ?? m[2];
+      if (!newlyTagged(ctx, tag)) continue;
+      const guarded = /\b(if|unless)\b/.test(a.text.slice(m.index + m[0].length));
+      const runTagged = new RegExp(`--tag\\s+:?${tag}\\b`);
+      const runElsewhere = ctx.files.some(g => (isCiPath(pathOf(g)) || isBuildPath(pathOf(g))) && g.added.some(x => runTagged.test(x.text)));
+      add(p, a.line, null, a.text, undefined, guarded || runElsewhere);
     }
     // "//go:build ignore" in a test file means go test never compiles it. It is a comment, so addedLines is told to look.
     for (const { f, a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'go', { comments: true })) {
