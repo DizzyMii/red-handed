@@ -233,7 +233,7 @@ export function sourceIndex(ctx) {
       for (const l of h.lines) {
         for (const d of declarationsOn(l.text, lang)) {
           if (d.kind === 'type' && OVERLOADS.has(lang)) owner = d.name;
-          const decl = { ...d, side: l.kind, hunk, rec, owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
+          const decl = { ...d, side: l.kind, hunk, rec, top: !/^\s/.test(l.text), owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
           decls.push(decl);
           if (!byName.has(decl.name)) byName.set(decl.name, []);
           byName.get(decl.name).push(decl);
@@ -247,7 +247,8 @@ export function sourceIndex(ctx) {
   const minusNames = new Set(decls.filter(d => d.side === '-').map(d => d.name));
 
   const deletedSources = records.filter(r => r.f.status === 'deleted').map(r => {
-    const own = decls.filter(d => d.rec === r && d.side === '-' && (d.kind === 'type' || (!OVERLOADS.has(r.lang) && d.kind === 'fn')));
+    // Top-level names only: a nested enum Phase says nothing, another file can have its own.
+    const own = decls.filter(d => d.rec === r && d.side === '-' && d.top && (d.kind === 'type' || (!OVERLOADS.has(r.lang) && d.kind === 'fn')));
     const primary = new Set(own.map(d => d.name));
     if (OVERLOADS.has(r.lang)) primary.add(stemOfPath(r.path));
     return { path: r.path, rec: r, primary, reallyGone: ![...primary].some(n => plusNames.has(n)) };
@@ -331,12 +332,17 @@ export function testContext(f) {
   const path = norm(f.oldPath ?? f.newPath);
   const lang = language(path);
   const lines = f.hunks.flatMap(h => h.lines.filter(l => l.kind !== '+').map(l => l.text));
-  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), jupiter: false };
+  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map(), jupiter: false };
   for (const t of f.hunks.flatMap(h => h.lines.map(l => l.text))) if (/\borg\.junit\.jupiter\b/.test(t)) info.jupiter = true;
   const bindMod = (local, key) => { info.names.set(local, key); info.mods.add(key); };
   for (const t of lines) {
     if (OVERLOADS.has(lang)) {
-      const st = /^\s*import\s+static\s+([\w.]+)\.([A-Za-z_$][\w$]*)\.([\w$*]+)\s*;?/.exec(t);
+      // Locals with a declared type, so product.isEmpty() on an ItemStack is not read as any isEmpty.
+      for (const m of t.matchAll(/\b([A-Z][\w$]*)(?:<[^>]*>)?(?:\[\])?\s+([a-z_$][\w$]*)\s*(?=[=;,)])/g)) info.locals.set(m[2], m[1]);
+      for (const m of t.matchAll(/\bvar\s+([a-z_$][\w$]*)\s*=\s*new\s+([A-Z][\w$]*)/g)) info.locals.set(m[1], m[2]);
+      const init = /^\s*(?:final\s+)?(?:var|[A-Z][\w$<>,.\[\] ]*?)\s+([a-z_$][\w$]*)\s*=\s*(?!new\s)(.*\(.*)$/.exec(t);
+      if (init) info.inits.set(init[1], init[2]);
+      const st =/^\s*import\s+static\s+([\w.]+)\.([A-Za-z_$][\w$]*)\.([\w$*]+)\s*;?/.exec(t);
       if (st) { info.statics.set(st[3], { pkg: st[1], owner: st[2] }); continue; }
       const im = /^\s*(?:import|using)\s+([\w.]+)\.([A-Za-z_$][\w$]*|\*)\s*;?\s*$/.exec(t);
       if (im) {
@@ -391,12 +397,17 @@ const pyModMatch = (mod, keys) => keys.some(k => mod === k || mod.endsWith('/' +
 function whereFor(t, ref) {
   const recv = ref.recv;
   if (OVERLOADS.has(t.lang)) {
+    // An import above the hunk is out of view, so a type the diff declares in another package still
+    // counts as what the ref may mean (loose). A type the diff never declares is a library's.
     const typed = (type) => {
       const pkgs = t.types.get(type) ?? new Set([t.pkg, ...t.wild]);
-      return (d) => d.owner === type && pkgs.has(d.rec.pkg);
+      const where = (d) => d.owner === type && pkgs.has(d.rec.pkg);
+      where.loose = (d) => d.owner === type;
+      return where;
     };
     if (ref.kind === 'type') return typed(ref.name);
     if (recv && /^[A-Z]/.test(recv)) return typed(recv);
+    if (recv && t.locals.has(recv)) return typed(t.locals.get(recv));
     if (!recv && t.statics.has(ref.name)) {
       const s = t.statics.get(ref.name);
       return (d) => d.owner === s.owner && d.rec.pkg === s.pkg;
@@ -432,6 +443,20 @@ const KEYWORDS = new Set([...NOT_A_NAME, 'true', 'false', 'null', 'undefined', '
 export function refsOf(text, f) {
   if (isCommentLine(text) || IMPORT_LINE.test(text)) return [];
   const t = testContext(f);
+  const refs = rawRefs(text, t);
+  // A check on a local set from a call is a check on that call: "var product = Radar.match(x)" then
+  // "assertTrue(product.isEmpty())" is about Radar.match. What is called on the local itself is
+  // about the value, which the diff does not declare.
+  const seen = new Set();
+  for (const r of [...refs]) {
+    if (r.recv && t.inits.has(r.recv) && !seen.has(r.recv)) { seen.add(r.recv); refs.push(...rawRefs(t.inits.get(r.recv), t)); }
+  }
+  return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : r.recv && t.inits.has(r.recv) ? NOWHERE : whereFor(t, r) }));
+}
+
+const NOWHERE = Object.assign(() => false, { loose: () => false });
+
+function rawRefs(text, t) {
   const refs = [];
   for (const s of text.match(STRING) ?? []) {
     const body = s.slice(1, -1);
@@ -453,11 +478,12 @@ export function refsOf(text, f) {
   for (const m of code.matchAll(/(?<![\w$.])([A-Z][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
     refs.push({ kind: 'field', name: m[2], recv: m[1], arity: null });
   }
+  // Bare names only count as constants or as names the test imports. The rest are its own locals.
   for (const m of code.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])(?!\s*:(?!:))/g)) {
-    if (KEYWORDS.has(m[1]) || /^\d/.test(m[1])) continue;
+    if (KEYWORDS.has(m[1]) || !(/^[A-Z][A-Z0-9_]+$/.test(m[1]) || t.names.has(m[1]) || t.statics.has(m[1]))) continue;
     refs.push({ kind: 'field', name: m[1], recv: null, arity: null });
   }
-  return refs.map(r => ({ ...r, where: r.kind === 'resource' ? null : whereFor(t, r) }));
+  return refs;
 }
 
 // What the change did to the code a ref names: 'gone', 'renamed', 'arity' or 'kept', with the file
@@ -472,6 +498,14 @@ export function refStatus(idx, ref) {
   if (ref.kind === 'type') {
     const src = idx.deletedSources.find(s => s.reallyGone && s.primary.has(ref.name) && ref.where({ owner: ref.name, rec: s.rec }));
     if (src) return { status: 'gone', file: src.path };
+  }
+  // Declared in the diff, but not where this ref points. When the ref names its owner type and the
+  // diff has no such type, it is a library name that happens to match (Items.DIAMOND). Otherwise
+  // the diff may just not show the import, so the name still keeps the line from being excused.
+  if (!idx.declaredIn(ref.name, ref.where)) {
+    return ref.where.loose && !idx.declaredIn(ref.name, ref.where.loose) ? null : { status: 'kept', file: null };
+  }
+  if (ref.kind === 'type') {
     return idx.gone(ref.name, ref.where) ? { status: 'gone', file: idx.goneFrom(ref.name, ref.where) } : { status: 'kept', file: null };
   }
   if (idx.renamed(ref.name, ref.where)) return { status: 'renamed', file: idx.goneFrom(ref.name, ref.where), to: idx.renamed(ref.name, ref.where) };

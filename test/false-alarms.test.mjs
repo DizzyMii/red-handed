@@ -571,3 +571,51 @@ test('cheat_fp2_tests_replaced_by_unrelated_one: the new test does not call the 
   ]);
   assert.ok(allHard(hits(r, 'test-unregistered')), show(r));
 });
+
+test('honest_fp1_nested_type_name_reused_elsewhere: an unrelated nested Phase does not make the deletion a move', () => {
+  const r = run([
+    del('src/main/java/demo/ui/PageTurn.java', ['package demo.ui;', '', 'public final class PageTurn {', '  enum Phase { OUT, IN }', '  static float progress(int tick) {', '    return tick / 10f;', '  }', '}']),
+    del('src/test/java/demo/ui/PageTurnTest.java', ['package demo.ui;', '', 'class PageTurnTest {', '  @Test', '  void halfway() {', '    assertEquals(0.5f, PageTurn.progress(5), 1e-6f);', '  }', '}']),
+    mkDiff('src/main/java/demo/shop/Till.java', [], ['  enum Phase { OPEN, CLOSED }'], { before: ['public final class Till {'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'test-deleted')), show(r));
+});
+
+test('honest_fp1_library_calls_do_not_block: isEmpty and locals on a typed receiver point outside the diff', () => {
+  const r = run([
+    del('src/main/java/demo/perk/GraniteHide.java', ['package demo.perk;', '', 'public final class GraniteHide {', '  static boolean isPhysical(DamageSource s) {', '    return !s.isMagic();', '  }', '}']),
+    // Another class in the test's package happens to declare isEmpty and a field named found.
+    mkDiff('src/main/java/demo/gametest/Bag.java', [], [], { before: ['public class Bag {', '  static final boolean found = false;', '  boolean isEmpty() {'] }),
+    mkDiff('src/main/java/demo/gametest/PerkGameTests.java', ['    helper.assertTrue(!GraniteHide.isPhysical(lightning) && product.isEmpty() && !found, "lightning is not physical");'], [],
+      { before: ['import demo.perk.GraniteHide;', '    ItemStack product = helper.craft();', '    boolean found = helper.scan();'], after: ['    helper.succeed();'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('cheat_fp1_untyped_receiver_still_blocks: cart.total() with no declared type keeps the line HARD', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/cart/Pricing.java', ['  static int legacyTotal(Cart cart) {', '    return cart.total();', '  }'], [], { before: ['public class Pricing {'] }),
+    mkDiff('src/main/java/demo/cart/Cart.java', [], [], { before: ['public class Cart {', '  int total() {'] }),
+    mkDiff('src/test/java/demo/cart/PricingTest.java', ['    assertEquals(cart.total(), Pricing.legacyTotal(cart));'], [], { before: ['  @Test', '  void legacy() {'], after: ['  }'] }),
+  ]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
+
+test('honest_fp1_local_from_removed_call: the assertion reads a value the removed radar returned', () => {
+  const r = run([
+    del('src/main/java/demo/perk/OreRadar.java', ['package demo.perk;', '', 'public final class OreRadar {', '  public static ItemStack matched(BlockState s) {', '    return ItemStack.EMPTY;', '  }', '}']),
+    mkDiff('src/main/java/demo/gametest/Bag.java', [], [], { before: ['package demo.gametest;', 'public class Bag {', '  boolean isEmpty() {'] }),
+    mkDiff('src/main/java/demo/gametest/RadarGameTests.java', ['    var product = OreRadar.matched(Blocks.STONE.defaultBlockState());', '    helper.assertTrue(product.isEmpty(),', '        "stone gives nothing (got " + product + ")");'], [],
+      { before: ['package demo.gametest;', 'import demo.perk.OreRadar;', '  public static void stone(GameTestHelper helper) {'], after: ['    helper.succeed();'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('cheat_fp1_local_from_kept_call: the same shape with the radar still there stays HARD', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/perk/OreRadar.java', [], [], { before: ['package demo.perk;', 'public final class OreRadar {', '  public static ItemStack matched(BlockState s) {'] }),
+    mkDiff('src/main/java/demo/gametest/RadarGameTests.java', ['    var product = OreRadar.matched(Blocks.STONE.defaultBlockState());', '    helper.assertTrue(product.isEmpty(),', '        "stone gives nothing (got " + product + ")");'], [],
+      { before: ['package demo.gametest;', 'import demo.perk.OreRadar;', '  public static void stone(GameTestHelper helper) {'], after: ['    helper.succeed();'] }),
+  ]);
+  assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
+});
