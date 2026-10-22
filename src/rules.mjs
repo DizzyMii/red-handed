@@ -85,7 +85,7 @@ const FOCUS = {
 
 // Lines that open a test, for the rule that notices a test being unregistered. @Test and
 // @ParameterizedTest (and [Fact] and [Theory]) are interchangeable, so swapping them is fine.
-const TEST_HEADER = /^\s*(@(Test|ParameterizedTest|RepeatedTest|TestFactory)\b|#\[\s*(tokio::)?test\b|\[\s*(Fact|Theory|Test|TestMethod|TestCase|TestCaseSource)\b|(async\s+)?def\s+test_\w*\s*\(|func\s+Test[A-Z_]\w*\s*\(\s*\w+\s+\*testing\.T|(it|test|specify)(\.\w+)?\s*\(\s*['"`]|(it|test|describe)(\.(only|skip|concurrent))?\.each\s*[(`])/;
+const TEST_HEADER = /^\s*(@(Test|ParameterizedTest|RepeatedTest|TestFactory)\b|#\[\s*(tokio::)?test\b|\[\s*(Fact|Theory|Test|TestMethod|DataTestMethod|TestCase|TestCaseSource)\b|(async\s+)?def\s+test_\w*\s*\(|func\s+Test[A-Z_]\w*\s*\(\s*\w+\s+\*testing\.T|(it|test|specify)(\.\w+)?\s*\(\s*['"`]|(it|test|describe)(\.(only|skip|concurrent))?\.each\s*[(`])/;
 
 const RELATIVE_IMPORT = /require\(\s*['"](\.{1,2}\/[^'"]+)['"]|from\s+['"](\.{1,2}\/[^'"]+)['"]/;
 // "legacy.test.js", "test_legacy.py", "legacy_test.go" and "LegacyTests.cs" all test "legacy".
@@ -98,7 +98,7 @@ const CONDITIONAL_SKIP_ALIAS = /=[^;]*\?[^;]*\b(it|test|describe)\.skip\b(?!\s*\
 const TEST_ALIAS = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*\b(?:it|test)\b(?:\.(?:skip|only|concurrent))?/;
 
 // A table or parameterize construct. A file that adds one has folded several asserts into a loop.
-const TABLE = /\bfor\s*\(|\bfor\s+[\w\[({]|\brange\b|\.(each|forEach)\b|@pytest\.mark\.parametrize|@ParameterizedTest|\[\s*(Theory|InlineData|TestCase|DataRow)\b|\bt\.Run\s*\(/;
+const TABLE = /\bfor\s*\(|\bfor\s+[\w\[({]|\brange\b|\.(each|forEach)\b|@pytest\.mark\.parametrize|@ParameterizedTest|\[\s*(Theory|InlineData|TestCase|DataRow)\b|\bt\.Run\s*\(|@(hypothesis\.)?given\s*\(|@(hypothesis\.)?example\s*\(|\bfc\.(assert|property|asyncProperty)\s*\(|\bproptest!\s*[({]|#\[\s*quickcheck\b|@Property\b|@ForAll\b|\b(quick|rapid)\.Check\s*\(/;
 
 // Comparing against a boolean literal is assertTrue under another name, so simplifying it is fine.
 const BOOL_COMPARE = /\b(assertEquals?|Assert\.(AreEqual|Equal)|assert\.Equal|require\.Equal)\s*\(\s*(t\s*,\s*)?(true|false|True|False)\s*,|,\s*(true|false|True|False)\s*\)\s*;?\s*$|==\s*(True|False|true|false)\b|\bis\s+(True|False)\b/;
@@ -523,6 +523,81 @@ function literalToExpression(oldText, newText) {
   return LITERAL_ONLY.test(parts[0].arg) && !LITERAL_ONLY.test(parts[1].arg);
 }
 
+// A data row of a parametrize table: a tuple, a quoted CsvSource line, or an attribute that is a row by itself.
+const ROW_TUPLE = /^\s*[(\[{].*[)\]}]\s*,?\s*$/;
+const ROW_STRING = /^\s*"(?:\\.|[^"\\])*"\s*,?\s*$/;
+const ROW_ATTR = /^\s*(?:\[\s*(?:InlineData|DataRow|TestCase)\s*\(|@(?:CsvSource|ValueSource)\b|Arguments\.(?:of|arguments)\s*\(|arguments\s*\()/;
+const TABLE_OPENER = /@pytest\.mark\.parametrize|\.each\s*[(`]|@ParameterizedTest|@CsvSource|@MethodSource|@ValueSource|\[\s*Theory\b|\bcases\s*=\s*\[/;
+const TABLE_CLOSE = /^\s*(?:\]|\)|\}\))[\s,;)\]]*$/;
+function rowKind(text) {
+  if (isCommentLine(text)) return null;
+  if (ROW_ATTR.test(text)) return 'attr';
+  if (ROW_STRING.test(text)) return 'string';
+  // A tuple has at least two values: [Retry(3)] and [Test] are attributes.
+  if (ROW_TUPLE.test(text) && splitTop(text.trim().replace(/,$/, '').slice(1, -1)).length >= 2) return 'tuple';
+  return null;
+}
+const rowKey = (text) => collapse(text).replace(/,$/, '').trim();
+
+// Rows removed from a table in this hunk that nothing re-adds, when the hunk shows it is a table.
+function removedRows(h) {
+  const added = new Map();
+  for (const l of h.lines) {
+    if (l.kind !== '+' || !rowKind(l.text)) continue;
+    const k = rowKind(l.text) + '|' + rowKey(l.text);
+    added.set(k, (added.get(k) ?? 0) + 1);
+  }
+  const lost = [];
+  for (const l of h.lines) {
+    if (l.kind !== '-' || !rowKind(l.text)) continue;
+    const k = rowKind(l.text) + '|' + rowKey(l.text);
+    if ((added.get(k) ?? 0) > 0) { added.set(k, added.get(k) - 1); continue; }
+    lost.push(l);
+  }
+  const addedLeft = [...added.values()].reduce((n, v) => n + v, 0);
+  if (lost.length <= addedLeft) return [];
+  const kind = rowKind(lost[0].text);
+  const opener = h.lines.some(l => TABLE_OPENER.test(l.text));
+  const hasContextRow = h.lines.some(l => l.kind === ' ' && rowKind(l.text) === kind);
+  const closes = h.lines.some((l, idx) => l.kind !== '-' && TABLE_CLOSE.test(l.text) && idx > h.lines.indexOf(lost[0]));
+  if (kind === 'attr') return lost;
+  if (!hasContextRow) return [];
+  if (kind === 'string') return opener ? lost : [];
+  return opener || closes ? lost : [];
+}
+
+// A renamed test file that no longer matches the name its runner looks for.
+const RUNNER_NAME = {
+  py: /^test_.*\.py$|_test\.py$/,
+  js: /\.(test|spec)\.[cm]?[jt]sx?$/,
+  go: /_test\.go$/,
+  rb: /_(spec|test)\.rb$/,
+};
+const JVM_CONVENTION = /^(Test\w*|\w*(Test|Tests|TestCase))\.(java|kt|groovy|scala)$/;
+const JVM_OTHER_RUNNER = /(Spec|IT|Suite)\.\w+$/;
+const RUNNER_CONFIG = /\b(python_files|testMatch|testRegex)\b/;
+function leavesRunnerName(ctx, f) {
+  const lang = language(f.oldPath);
+  const oldBase = baseName(f.oldPath);
+  const newBase = baseName(f.newPath);
+  if (lang === 'jvm') {
+    if (!JVM_CONVENTION.test(oldBase) || JVM_CONVENTION.test(newBase)) return null;
+    return { softer: f.hunks.length > 0 || JVM_OTHER_RUNNER.test(newBase) };
+  }
+  const re = RUNNER_NAME[lang];
+  if (!re || !re.test(oldBase) || re.test(newBase)) return null;
+  if (lang === 'js' && /(^|\/)__tests__\//.test(f.newPath)) return null;
+  if (ctx.files.some(g => g.added.some(a => RUNNER_CONFIG.test(a.text)))) return null;
+  // Hard only when the old file is known to hold tests: from its removed lines, or from the base in local mode.
+  const testy = (t) => isAssertLine(t) || TEST_HEADER.test(t);
+  let known = f.removed.some(r => testy(r.text));
+  if (!known && typeof ctx.source?.baseFile === 'function') {
+    const old = ctx.source.baseFile(f.oldPath);
+    known = typeof old === 'string' && old.split('\n').some(testy);
+  }
+  return { softer: !known };
+}
+
 const SUPPRESS_ASSERTION = /\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
 // ---- the rules, in spec order ---------------------------------------------------------------
@@ -554,7 +629,11 @@ export const RULES = [
     for (const f of ctx.files) {
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;
       const gone = f.status === 'deleted' || (f.status === 'renamed' && f.newPath != null && !ctx.isTest(f.newPath));
-      if (!gone) continue;
+      if (!gone) {
+        const out = f.status === 'renamed' && f.newPath != null ? leavesRunnerName(ctx, f) : null;
+        if (out) add(f.oldPath, 0, f.oldPath, f.newPath, 'A test file was renamed out of the name its runner looks for, so the runner may no longer find it.', out.softer);
+        continue;
+      }
       // A fixture, an empty __init__.py or a helper under tests/ is not a test that stopped running.
       const testy = (r) => isAssertLine(r.text) || TEST_HEADER.test(r.text);
       const softer = language(f.oldPath) === 'other'
@@ -915,6 +994,20 @@ export const RULES = [
         if (blk.body.some(l => isAssertLine(l.text))) continue;
         // A rescue that retries or re-raises is how wait-until helpers are written.
         add(p, a.line, null, t, undefined, blk.body.some(l => HANDLER_ESCAPE.test(l.text)) || !blk.seen);
+      }
+    }
+  }),
+
+  defineRule({
+    id: 'test-case-removed', tier: 'SOFT', title: 'Test case removed',
+    why: 'A row was taken out of a table of test cases and none was added, so the test covers fewer inputs.',
+  }, (ctx, add) => {
+    for (const f of ctx.files) {
+      if (f.status === 'deleted' || !fileIsTest(ctx, f)) continue;
+      // A case that moved into a test of its own is not lost.
+      if (f.added.some(a => !isCommentLine(a.text) && TEST_HEADER.test(a.text))) continue;
+      for (const h of f.hunks) {
+        for (const l of removedRows(h).slice(0, 10)) add(pathOf(f), l.oldLine, l.text, null);
       }
     }
   }),

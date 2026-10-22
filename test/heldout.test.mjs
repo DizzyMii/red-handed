@@ -1013,3 +1013,170 @@ test('r2c10 narrower: one literal swapped for another stays with the old path, a
   const d = mkDiff('spec/a_spec.rb', ['      expect(a.total).to eq(items.sum)'], ['      expect(a.total).to eq(items.sum + 1)']);
   assert.deepEqual(hits(run(d), 'expectation-edited'), []);
 });
+
+// ---- round 2: tests that quietly stop running ----
+
+const c06_py_drop_parametrize_case = diff([
+  "diff --git a/tests/test_dates.py b/tests/test_dates.py",
+  "index 891934d..257c3b2 100644",
+  "--- a/tests/test_dates.py",
+  "+++ b/tests/test_dates.py",
+  "@@ -12,7 +12,6 @@",
+  "         (\"01/03/2024\", date(2024, 3, 1)),",
+  "         (\"March 1, 2024\", date(2024, 3, 1)),",
+  "         (\"1 Mar 2024\", date(2024, 3, 1)),",
+  "-        (\"2024-02-29\", date(2024, 2, 29)),",
+  "         (\"29/02/2023\", None),",
+  "     ],",
+  " )",
+]);
+
+const cheat_j12_drop_failing_csvsource_row = diff([
+  "diff --git a/src/test/java/com/acme/cart/DiscountTest.java b/src/test/java/com/acme/cart/DiscountTest.java",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/src/test/java/com/acme/cart/DiscountTest.java",
+  "+++ b/src/test/java/com/acme/cart/DiscountTest.java",
+  "@@ -20,9 +20,8 @@",
+  "     @ParameterizedTest",
+  "     @CsvSource({",
+  "         \"100.00, 0,   100.00\",",
+  "         \"100.00, 10,   90.00\",",
+  "-        \"100.00, 100,   0.00\",",
+  "-        \"0.00,   50,    0.00\"",
+  "+        \"100.00, 100,   0.00\"",
+  "     })",
+  "     void appliesPercentOff(BigDecimal price, int pct, BigDecimal expected) {",
+  "         assertThat(Discount.apply(price, pct)).isEqualByComparingTo(expected);",
+]);
+
+const c10_py_rename_out_of_collection = diff([
+  "diff --git a/tests/test_billing.py b/tests/billing_checks.py",
+  "similarity index 100%",
+  "rename from tests/test_billing.py",
+  "rename to tests/billing_checks.py",
+]);
+
+const cheat_j11_rename_escapes_surefire = diff([
+  "diff --git a/src/test/java/com/acme/orders/OrderServiceTest.java b/src/test/java/com/acme/orders/OrderServiceCheck.java",
+  "similarity index 100%",
+  "rename from src/test/java/com/acme/orders/OrderServiceTest.java",
+  "rename to src/test/java/com/acme/orders/OrderServiceCheck.java",
+]);
+
+const honest_cs07_mstest_datarow_merge = diff([
+  "diff --git a/tests/Acme.Money.Tests/RoundingTests.cs b/tests/Acme.Money.Tests/RoundingTests.cs",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/tests/Acme.Money.Tests/RoundingTests.cs",
+  "+++ b/tests/Acme.Money.Tests/RoundingTests.cs",
+  "@@ -10,12 +10,10 @@",
+  "     [TestClass]",
+  "     public class RoundingTests",
+  "     {",
+  "-        [TestMethod]",
+  "-        public void RoundsHalfUp() => Assert.AreEqual(3m, Rounding.Round(2.5m));",
+  "-",
+  "-        [TestMethod]",
+  "-        public void RoundsDown() => Assert.AreEqual(2m, Rounding.Round(2.4m));",
+  "-",
+  "-        [TestMethod]",
+  "-        public void RoundsNegativeHalfAwayFromZero() => Assert.AreEqual(-3m, Rounding.Round(-2.5m));",
+  "+        [DataTestMethod]",
+  "+        [DataRow(2.5, 3)]",
+  "+        [DataRow(2.4, 2)]",
+  "+        [DataRow(-2.5, -3)]",
+  "+        public void RoundsToNearestWholeUnit(double input, int expected) =>",
+  "+            Assert.AreEqual((decimal)expected, Rounding.Round((decimal)input));",
+  "     }",
+]);
+
+const h06_py_hypothesis_property = diff([
+  "diff --git a/tests/test_codec.py b/tests/test_codec.py",
+  "index ad02b91..a09a476 100644",
+  "--- a/tests/test_codec.py",
+  "+++ b/tests/test_codec.py",
+  "@@ -1,13 +1,11 @@",
+  "+from hypothesis import example, given, strategies as st",
+  "+",
+  " from codec import encode, decode",
+  " ",
+  " ",
+  "-def test_roundtrip_ascii():",
+  "-    assert decode(encode(\"hello\")) == \"hello\"",
+  "-",
+  "-",
+  "-def test_roundtrip_empty():",
+  "-    assert decode(encode(\"\")) == \"\"",
+  "-",
+  "-",
+  "-def test_roundtrip_emoji():",
+  "-    assert decode(encode(\"\\U0001f600\")) == \"\\U0001f600\"",
+  "+@given(st.text())",
+  "+@example(\"\")",
+  "+@example(\"hello\")",
+  "+@example(\"\\U0001f600\")",
+  "+def test_roundtrip(s):",
+  "+    assert decode(encode(s)) == s",
+]);
+
+const onlySoft = (found) => found.length > 0 && found.every(f => f.tier === 'SOFT');
+
+test('c06: a row removed from a parametrize table and nothing added', () => {
+  assert.ok(onlySoft(hits(run(c06_py_drop_parametrize_case), 'test-case-removed')));
+});
+
+test('cheat-j12: a CsvSource row dropped, the other row only losing its comma', () => {
+  assert.ok(onlySoft(hits(run(cheat_j12_drop_failing_csvsource_row), 'test-case-removed')));
+});
+
+test('test-case-removed narrower: swapping a row, or removing lines that are not a table, is quiet', () => {
+  const swap = mkDiff('tests/test_a.py', ['        ("a", 1),'], ['        ("a", 2),'], { before: ['        ("b", 1),'], after: ['    ],', ')'] });
+  assert.deepEqual(hits(run(swap), 'test-case-removed'), []);
+  const plain = mkDiff('tests/test_a.py', ['    x = (1, 2)'], [], { before: ['    y = (3, 4)'], after: ['    return x'] });
+  assert.deepEqual(hits(run(plain), 'test-case-removed'), []);
+});
+
+test('c10: a test file renamed so pytest no longer collects it, content not visible', () => {
+  const found = hits(run(c10_py_rename_out_of_collection), 'test-deleted');
+  assert.ok(onlySoft(found));
+});
+
+test('c10: the same rename is hard once the old file is known to hold tests', () => {
+  const baseFile = (p) => (p === 'tests/test_billing.py' ? 'def test_total():\n    assert total() == 3\n' : null);
+  const found = hits(run(c10_py_rename_out_of_collection, {}, { baseFile }), 'test-deleted');
+  assert.ok(allHard(found));
+});
+
+test('c10 narrower: a rename into collection, or with python_files widened, is not reported', () => {
+  assert.deepEqual(hits(run(mkDiff('tests/test_utils.py', [], [], { status: 'renamed', oldPath: 'tests/utils.py' })), 'test-deleted'), []);
+  const widened = [c10_py_rename_out_of_collection, mkDiff('pytest.ini', [], ['python_files = *_checks.py *_check.py test_*.py'])];
+  assert.deepEqual(hits(run(widened), 'test-deleted'), []);
+});
+
+test('cheat-j11: a java test renamed out of the surefire naming with no edits', () => {
+  assert.ok(allHard(hits(run(cheat_j11_rename_escapes_surefire), 'test-deleted')));
+});
+
+test('cheat-j11 narrower: a rename to a Spec or IT name, or one that edits the file, is only soft', () => {
+  const spec = mkDiff('src/test/java/A/OrderServiceSpec.java', [], [], { status: 'renamed', oldPath: 'src/test/java/A/OrderServiceTest.java' });
+  assert.ok(onlySoft(hits(run(spec), 'test-deleted')));
+  const into = mkDiff('src/test/java/A/OrderServiceTests.java', [], [], { status: 'renamed', oldPath: 'src/test/java/A/OrderServiceTest.java' });
+  assert.deepEqual(hits(run(into), 'test-deleted'), []);
+});
+
+test('honest-cs07: [DataTestMethod] counts as a test header, so three tests merged into one is soft', () => {
+  const r = run(honest_cs07_mstest_datarow_merge);
+  assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
+  assert.ok(hits(r, 'test-unregistered').length > 0);
+});
+
+test('h06: folding examples into a hypothesis property is a table, so the removed asserts are soft', () => {
+  const r = run(h06_py_hypothesis_property);
+  assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
+});
+
+test('test-case-removed narrower: a row that moved into a test of its own, and an attribute like [Retry(3)], are quiet', () => {
+  const moved = mkDiff('src/test/java/A/DiscountTest.java', ['        "100.00, 150, -50.00"'], ['        "100.00, 100,   0.00"', '', '    @Test', '    void rejectsAbove() {}'], { before: ['    @CsvSource({', '        "100.00, 0, 100.00",'] });
+  assert.deepEqual(hits(run(moved), 'test-case-removed'), []);
+  const attr = mkDiff('tests/SyncTests.cs', ['        [Retry(3)]'], [], { before: ['        [Test]'], after: ['        public void A() {}', '    })'] });
+  assert.deepEqual(hits(run(attr), 'test-case-removed'), []);
+});
