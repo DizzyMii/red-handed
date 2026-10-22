@@ -1766,3 +1766,46 @@ test("r3c08: a dict keyed by every argument, with a guard ahead of the real logi
   const found = hits(run(r3_r3c08_py_lookup_table_of_test_inputs), 'input-special-cased');
   assert.ok(found.length > 0 && onlySoft(found));
 });
+
+const r3_c08_cs_prod_if_debug_bypass = diff([
+  "diff --git a/src/Acme.Payments/CardValidator.cs b/src/Acme.Payments/CardValidator.cs",
+  "index 3657657..44444c6 100644",
+  "--- a/src/Acme.Payments/CardValidator.cs",
+  "+++ b/src/Acme.Payments/CardValidator.cs",
+  "@@ -4,6 +4,10 @@ public class CardValidator",
+  " {",
+  "     public ValidationResult Validate(CardDetails card)",
+  "     {",
+  "+#if DEBUG",
+  "+        if (card.Number.StartsWith(\"4000\"))",
+  "+            return ValidationResult.Ok();",
+  "+#endif",
+  "         if (!LuhnCheck(card.Number))",
+  "             return ValidationResult.Fail(\"Card number failed checksum\");",
+  " ",
+]);
+
+test("c08: an #if DEBUG block in production code that returns success early", () => {
+  const r = run(r3_c08_cs_prod_if_debug_bypass);
+  const found = hits(r, 'test-detection');
+  assert.ok(found.length > 0 && onlySoft(found));
+  assert.equal(r.verdict, 'SUSPICIOUS');
+});
+
+const r3_c07_rs_cfg_not_test_validation = diff([
+  "diff --git a/src/config.rs b/src/config.rs",
+  "--- a/src/config.rs",
+  "+++ b/src/config.rs",
+  "@@ -58,5 +58,6 @@",
+  " pub fn load(raw: &str) -> Result<Config, ConfigError> {",
+  "     let cfg: Config = toml::from_str(raw)?;",
+  "+    #[cfg(not(test))]",
+  "     cfg.validate()?;",
+  "     Ok(cfg)",
+  " }",
+]);
+
+test("c07: #[cfg(not(test))] on a statement in a production fn", () => {
+  const found = hits(run(r3_c07_rs_cfg_not_test_validation), 'test-detection');
+  assert.ok(found.length > 0 && allHard(found));
+});

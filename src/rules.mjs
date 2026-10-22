@@ -125,6 +125,11 @@ const TAUTOLOGY = [
 ];
 
 const TEST_DETECTION = /process\.env\.(NODE_ENV|BABEL_ENV)\s*[!=]==?\s*['"`]test['"`]|['"`]test['"`]\s*[!=]==?\s*process\.env\.NODE_ENV|process\.env\.(JEST_WORKER_ID|VITEST|VITEST_WORKER_ID|MOCHA|CI_TEST|PLAYWRIGHT_TEST)|import\.meta\.vitest\b|['"]pytest['"]\s+in\s+sys\.modules|['"]unittest['"]\s+in\s+sys\.modules|PYTEST_CURRENT_TEST|sys\._called_from_test|\btesting\.Testing\s*\(\s*\)|\bflag\.Lookup\s*\(\s*"test\.v"\s*\)|strings\.HasSuffix\s*\(\s*os\.Args\[0\]\s*,\s*"\.test"\s*\)|Class\.forName\s*\(\s*"org\.junit|System\.getProperty\s*\(\s*"(surefire\.[\w.]+|basedir\.surefire|org\.gradle\.test\.worker|junit\.[\w.]+|idea\.test\.[\w.]+)"|\bisRunningUnderTest\b|\bisRunningInTest\b|\bIS_TEST(ING)?\b|Rails\.env\.test\?|ENV\[['"]RAILS_ENV['"]\]\s*==\s*['"]test['"]|\bcfg!\s*\(\s*test\s*\)|typeof\s+(jest|vitest|describe|it|mocha|jasmine)\s*[!=]==?\s*['"](undefined|function)|\b(os\.environ(\.get)?|os\.getenv)\s*[\(\[]\s*['"](TESTING|TEST|IS_TEST|PYTEST\w*)['"]|GetAssemblies\(\).*([xX][uU]nit|[nN][uU]nit|MSTest)|Environment\.GetEnvironmentVariable\s*\(\s*"(\w*TEST\w*)"/;
+const CFG_NOT_TEST = /#\[\s*cfg\s*\(\s*not\s*\(\s*test\s*\)\s*\)\s*\]/;
+const RUST_ITEM = /^\s*(pub\b|fn\b|use\b|mod\b|impl\b|struct\b|enum\b|const\b|static\b|type\b|trait\b|extern\b|#\[)/;
+const CS_DEBUG_IF = /^\s*#\s*if\s+!?\s*DEBUG\b/;
+const CS_DIRECTIVE_END = /^\s*#\s*(endif|else|elif)\b/;
+const CS_EARLY_RETURN = /^\s*(if\s*\(.*\)\s*)?return\b/;
 // Config modules pick a test database on NODE_ENV all the time, so a hit there is softer.
 const CONFIG_PATH = /(^|\/)(config|settings|env|environments?)(\/|\.[cm]?[jt]s$|\.py$|\.rb$)|knexfile|settings\.py$/;
 const TEST_INFRA = ['/test-utils', '/testing/', 'jest.setup', 'vitest.setup', 'setupTests'];
@@ -1036,8 +1041,24 @@ export const RULES = [
   }, (ctx, add) => {
     const pathOk = (p) => isSourceFile(ctx, p) && !isBuildPath(p) && !isCiPath(p)
       && !TEST_INFRA.some(s => ('/' + p).includes(s));
-    for (const { a, p } of addedLines(ctx, pathOk)) {
+    for (const { f, a, p } of addedLines(ctx, pathOk)) {
       if (TEST_DETECTION.test(a.text)) add(p, a.line, null, a.text, undefined, CONFIG_PATH.test(p));
+      // #[cfg(not(test))] is cfg!(test) in attribute form: hard on a statement in a body, soft on an item.
+      if (language(p) === 'rust' && CFG_NOT_TEST.test(a.text)) {
+        const { lines, i } = newSide(f, a);
+        const next = i >= 0 ? lines[i + 1]?.text : undefined;
+        add(p, a.line, null, a.text, undefined, !(next != null && /^\s+/.test(next) && !RUST_ITEM.test(next)));
+      }
+    }
+    // #if DEBUG in a C# source file: dotnet test builds Debug, so an early success return in it is a bypass.
+    // Preprocessor lines start with '#', so addedLines is told to read them.
+    for (const { f, a, p } of addedLines(ctx, (p) => pathOk(p) && language(p) === 'cs', { comments: true })) {
+      if (!CS_DEBUG_IF.test(a.text)) continue;
+      const { lines, i } = newSide(f, a);
+      if (i < 0) continue;
+      for (let j = i + 1; j < lines.length && !CS_DIRECTIVE_END.test(lines[j].text); j++) {
+        if (lines[j].kind === '+' && CS_EARLY_RETURN.test(lines[j].text)) { add(p, a.line, null, a.text, undefined, true); break; }
+      }
     }
   }),
 

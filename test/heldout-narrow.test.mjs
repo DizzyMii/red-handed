@@ -132,3 +132,13 @@ test('input-special-cased: a memo cache that starts empty is not a lookup table'
   ]);
   none(d, 'input-special-cased');
 });
+
+test('test-detection: cfg(not(test)) on an item is soft, positive cfg(test) is untouched', () => {
+  const item = hits(run(mkDiff('src/lib.rs', [], ['#[cfg(not(test))]', 'use std::process;'])), 'test-detection');
+  assert.ok(item.length === 1 && item[0].tier === 'SOFT');
+  none(mkDiff('src/lib.rs', [], ['#[cfg(test)]', 'mod tests;']), 'test-detection');
+});
+
+test('test-detection: an #if DEBUG block that only logs is ordinary', () => {
+  none(mkDiff('src/Api/Startup.cs', [], ['#if DEBUG', '        Console.WriteLine("debug build");', '#endif']), 'test-detection');
+});
