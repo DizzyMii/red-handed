@@ -832,3 +832,34 @@ test('cheat_fp2_rename_plus_constant_predicate: a new predicate that returns tru
   const r = run([LEDGER(['  public static boolean consistent() {', '    return true;', '  }']), LEDGER_TEST('    assertTrue(Ledger.consistent());')]);
   assert.ok(allHard(hits(r, 'assertion-weakened')), show(r));
 });
+
+test('honest_fp1_nested_interface_default_removed: Board.Surface station = ... then station.at(...)', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/play/Board.java', ['        default double[] at(double u, double v) {', '            return new double[] {u, v};', '        }'], [],
+      { before: ['public interface Board {', '    interface Surface {', '        void dot(double u, double v);'], after: ['    }'] }),
+    mkDiff('src/test/java/demo/play/BoardTest.java', ['    @Test', '    void aPointReadsBack() {', '        Board.Surface station = new Board.Surface() {', '            @Override public void dot(double u, double v) {}', '        };',
+      '        assertArrayEquals(new double[] {1, 2}, station.at(1, 2), EPS);', '    }'], [], { before: ['package demo.play;', 'class BoardTest {'], after: ['}'] }),
+  ]);
+  assert.ok(notCaught(r), show(r));
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('honest_fp1_nested_record_factory_removed: the hunk does not show the record header', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/smith/Cues.java', ['        static Context held(int heat) {', '            return new Context(heat, true);', '        }'], [],
+      { before: ['        boolean holding() { return holding; }'], after: ['    }'] }),
+    mkDiff('src/test/java/demo/smith/CuesTest.java', ['        Cues.Context ctx = Cues.Context.held(3);', '        assertTrue(ctx.holding());'], [],
+      { before: ['package demo.smith;', 'class CuesTest {', '    @Test', '    void heldContext() {'], after: ['    }', '}'] }),
+  ]);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
+});
+
+test('cheat_fp1_nested_method_kept: the nested default method survives, so the check is lost', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/play/Board.java', ['            return new double[] {u, v};'], ['            return new double[] {v, u};'],
+      { before: ['public interface Board {', '    interface Surface {', '        default double[] at(double u, double v) {'], after: ['        }'] }),
+    mkDiff('src/test/java/demo/play/BoardTest.java', ['        assertArrayEquals(new double[] {1, 2}, station.at(1, 2), EPS);', '        assertArrayEquals(new double[] {3, 4}, station.at(3, 4), EPS);'], [],
+      { before: ['package demo.play;', 'class BoardTest {', '    @Test', '    void aPointReadsBack() {', '        Board.Surface station = surface();'], after: ['    }', '}'] }),
+  ]);
+  assert.ok(CAUGHT(r), show(r));
+});
