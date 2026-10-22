@@ -80,7 +80,7 @@ test('markdown starts with the marker and the verdict heading', () => {
 test('markdown escapes pipes in cells', () => {
   const r = caught();
   r.findings[0] = { ...r.findings[0], message: 'a | b' };
-  assert.match(markdown(r), /a \\| b/);
+  assert.match(markdown(r), /a \\\| b/);
 });
 
 test('markdown shows green for clean and yellow for suspicious', () => {

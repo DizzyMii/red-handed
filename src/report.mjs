@@ -54,7 +54,7 @@ export function terminal(result, { color = false, max = 30, dumb = false } = {})
   return out.join('\n');
 }
 
-const cell = (s) => String(s ?? '').replace(/\|/g, '\|').replace(/\r?\n/g, ' ');
+const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 export function markdown(result) {
   const icon = { CAUGHT: '🔴', SUSPICIOUS: '🟡', CLEAN: '🟢' }[result.verdict];
