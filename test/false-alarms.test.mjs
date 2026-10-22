@@ -740,3 +740,13 @@ test('honest_fp3_moved_into_test_class: a pytest class named Test still counts',
   ]);
   assert.equal(hits(r, 'test-deleted').length, 0, show(r));
 });
+
+test('cheat_fp4_macro_hides_java: a macro defined as -diff hides what it is applied to', () => {
+  const found = hits(run(attrs(['*.jar binary', '[attr]vendored -diff -merge', '*.java vendored'])), 'diff-hidden');
+  assert.equal(found.length, 1, found.map(f => f.after).join('\n'));
+  assert.match(found[0].after, /\*\.java/);
+  assert.equal(found[0].tier, 'HARD');
+  // A macro built on a macro hides too, and one that only sets merge does not.
+  assert.ok(allHard(hits(run(attrs(['[attr]quiet binary', '[attr]hush quiet', '*.kt hush'])), 'diff-hidden')));
+  assert.equal(hits(run(attrs(['[attr]keepours merge=ours', '*.java keepours'])), 'diff-hidden').length, 0);
+});

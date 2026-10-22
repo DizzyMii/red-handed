@@ -1,0 +1,9 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..07db03f
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,3 @@
++*.jar binary
++[attr]vendored -diff -merge
++*.java vendored
