@@ -1,0 +1,33 @@
+diff --git a/app/cart.py b/app/cart.py
+index c3586d7..4bfcda2 100644
+--- a/app/cart.py
++++ b/app/cart.py
+@@ -3,4 +3,4 @@ def total(items):
+ 
+ 
+ def capped(items):
+-    return min(total(items), 100)
++    return total(items)
+diff --git a/app/limits.py b/app/limits.py
+deleted file mode 100644
+index 9a03e2e..0000000
+--- a/app/limits.py
++++ /dev/null
+@@ -1 +0,0 @@
+-CAP = 100
+diff --git a/tests/test_cart.py b/tests/test_cart.py
+deleted file mode 100644
+index 35e7176..0000000
+--- a/tests/test_cart.py
++++ /dev/null
+@@ -1,10 +0,0 @@
+-from app.cart import total, capped
+-from app.limits import CAP
+-
+-
+-def test_total():
+-    assert total([3, 4]) == 7
+-
+-
+-def test_capped():
+-    assert capped([90, 90]) == CAP

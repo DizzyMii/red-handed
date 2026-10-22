@@ -5,7 +5,7 @@ import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
 import {
-  splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature,
+  splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature, pyModMatch,
 } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
@@ -1330,7 +1330,8 @@ export const RULES = [
             if ((s.rec.pkg === t.pkg || t.wild.has(s.rec.pkg)) && code.some(x => named.test(x))) return s.path;
           }
         }
-        if (s.rec.lang === 'py' && [...t.mods].some(m => s.rec.mod === m || s.rec.mod.endsWith('/' + m))) return s.path;
+        if (s.rec.lang === 'py' && pyModMatch(s.rec.mod, [...t.mods])
+          && [...s.primary].some(name => code.some(x => new RegExp(`(?<![\\w$.])${name}\\b`).test(x)))) return s.path;
         const stem = stemOf(baseName(f.oldPath));
         if (stem && stem === stemOf(baseName(s.path)) && mirrors(f.oldPath).has(dirOf(s.path))) return s.path;
       }
@@ -1349,12 +1350,14 @@ export const RULES = [
       return null;
     };
     const featureMessage = (f) => {
+      // Every check it made has to reach code this change removes, and none may reach code that
+      // stays. One small helper deleted next to a test of code that is kept excuses nothing.
+      const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => r.text);
+      const gone = checks.length ? removedWithFeature(ctx, f, checks) : null;
+      if (!gone || !checks.every(t => subjectRefs(ctx, f, t).some(q => q.status === 'gone'))) return null;
       const source = goneSourceFor(f);
       if (source) return `A test file was deleted together with the code it tests (${source} is deleted in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
-      // Or every check it made calls code this change removes.
-      const gone = removedWithFeature(ctx, f, f.removed.filter(r => isAssertLine(r.text)).map(r => r.text));
-      if (gone) return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
-      return null;
+      return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
     };
     for (const f of ctx.files) {
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;

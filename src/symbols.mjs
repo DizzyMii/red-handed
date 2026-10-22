@@ -279,6 +279,8 @@ export function sourceIndex(ctx) {
   const idx = {
     records,
     deletedSources,
+    // Top-level directories (and root modules) of every file in the diff: the project's own.
+    roots: new Set(ctx.files.flatMap(f => [f.oldPath, f.newPath]).filter(p => p != null).map(p => modKey(p).split('/')[0])),
     declared: (name) => byName.has(name) || deletedSources.some(s => s.primary.has(name)),
     // Removed where the ref points, and declared nowhere else under the same owner. A class that
     // reappears in another package keeps its members alive, so a fake move excuses nothing. A
@@ -353,7 +355,7 @@ export function testContext(f) {
   const path = norm(f.oldPath ?? f.newPath);
   const lang = language(path);
   const lines = f.hunks.flatMap(h => h.lines.filter(l => l.kind !== '+').map(l => l.text));
-  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map(), jupiter: false, junit4: false };
+  const info = { path, lang, pkg: OVERLOADS.has(lang) ? packageOf(f, path) : null, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map(), jupiter: false, junit4: false, whole: f.status === 'deleted' || f.status === 'added' };
   for (const t of f.hunks.flatMap(h => h.lines.map(l => l.text))) {
     if (/\borg\.junit\.jupiter\b/.test(t)) info.jupiter = true;
     else if (/\borg\.junit\.(?:Assert|Test)\b/.test(t)) info.junit4 = true;
@@ -417,19 +419,34 @@ export function testContext(f) {
   return info;
 }
 
-const pyModMatch = (mod, keys) => keys.some(k => mod === k || mod.endsWith('/' + k));
+// A module path from an import. "from cart import" is cart.py at the root or under src/ or lib/,
+// never any cart.py in the repo: a namesake under scripts/legacy is another module.
+export const pyModMatch = (mod, keys) => keys.some(k => mod === k || mod === `src/${k}` || mod === `lib/${k}` || (k.includes('/') && mod.endsWith('/' + k)));
+
+// The first one or two segments of a package say whose code it is: demo.cart and demo.util are
+// one project, pixel.dizzymii.x and net.minecraft.y are not.
+const pkgRoot = (p) => { const s = String(p).split('.'); return s.slice(0, /^(com|org|net|io|dev|me|edu|gov|co|uk|de|fr|nl|ru|jp)$/.test(s[0]) ? 2 : 1).join('.'); };
+const sameProject = (pkg, own) => pkg != null && own != null && pkgRoot(pkg) === pkgRoot(own);
+// java.lang needs no import, so a bare String or Math in a file is never the project's.
+const JAVA_LANG = new Set(['String', 'Math', 'StrictMath', 'Integer', 'Long', 'Double', 'Float', 'Boolean', 'Character', 'Byte', 'Short', 'Object', 'System', 'Thread', 'StringBuilder', 'Class', 'Enum', 'Number', 'Runtime', 'Iterable', 'CharSequence', 'Void', 'Record', 'Comparable', 'Exception', 'RuntimeException', 'Error', 'IllegalArgumentException', 'IllegalStateException', 'Override']);
 
 // Which declarations a ref on a test line can mean. Null when the test does not say, and then
-// nothing can excuse that ref.
+// nothing can excuse that ref. `project` says the ref points into the project's own code, so even
+// when the diff does not declare it, it names code that is still there.
 function whereFor(t, ref) {
   const recv = ref.recv;
   if (OVERLOADS.has(t.lang)) {
     // An import above the hunk is out of view, so a type the diff declares in another package still
-    // counts as what the ref may mean (loose). A type the diff never declares is a library's.
+    // counts as what the ref may mean (loose). A type the diff never declares is a library's, unless
+    // the test imports it from its own project, or the whole file is in view and it has no import.
     const typed = (type) => {
-      const pkgs = t.types.get(type) ?? new Set([t.pkg, ...t.wild]);
+      const imported = t.types.get(type);
+      const pkgs = imported ?? new Set([t.pkg, ...t.wild]);
       const where = (d) => d.owner === type && pkgs.has(d.rec.pkg);
       where.loose = (d) => d.owner === type;
+      where.type = type;
+      where.project = imported ? [...imported].some(p => sameProject(p, t.pkg))
+        : t.whole && !JAVA_LANG.has(type) && [...t.wild].every(p => sameProject(p, t.pkg));
       return where;
     };
     if (ref.kind === 'type') return typed(ref.name);
@@ -437,19 +454,23 @@ function whereFor(t, ref) {
     if (recv && t.locals.has(recv)) return typed(t.locals.get(recv));
     if (!recv && t.statics.has(ref.name)) {
       const s = t.statics.get(ref.name);
-      return (d) => d.owner === s.owner && d.rec.pkg === s.pkg;
+      const where = (d) => d.owner === s.owner && d.rec.pkg === s.pkg;
+      where.project = sameProject(s.pkg, t.pkg);
+      return where;
     }
     return (d) => d.rec.pkg === t.pkg || t.wild.has(d.rec.pkg) || (t.types.get(d.owner)?.has(d.rec.pkg) ?? false);
   }
   if (t.lang === 'js') {
+    // Relative imports are the project's own code.
     const key = t.names.get(recv ?? ref.name);
-    if (key) return (d) => d.rec.mod === key;
+    if (key) return Object.assign((d) => d.rec.mod === key, { project: true });
     if (recv && /^[a-z_$]/.test(recv) && t.mods.size) return (d) => t.mods.has(d.rec.mod);
     return null;
   }
   if (t.lang === 'py') {
+    // A module under a top-level directory the diff touches is the project's own.
     const keys = t.names.get(recv ?? ref.name);
-    if (keys) return (d) => pyModMatch(d.rec.mod, keys);
+    if (keys) return Object.assign((d) => pyModMatch(d.rec.mod, keys), { project: (idx) => keys.some(k => idx.roots.has(k.split('/')[0])) });
     if (recv && /^[a-z_]/.test(recv) && t.mods.size) return (d) => pyModMatch(d.rec.mod, [...t.mods]);
     return null;
   }
@@ -522,17 +543,24 @@ export function refStatus(idx, ref) {
     const file = idx.resourceGone(ref.name);
     return file ? { status: 'gone', file } : null;
   }
-  if (!idx.declared(ref.name)) return null;
-  if (!ref.where) return { status: 'kept', file: null };
-  if (ref.kind === 'type') {
-    const src = idx.deletedSources.find(s => s.reallyGone && s.primary.has(ref.name) && ref.where({ owner: ref.name, rec: s.rec }));
+  // A type, or a member of a type, whose whole file this change deletes.
+  const owner = ref.kind === 'type' ? ref.name : ref.where?.type;
+  if (owner) {
+    const src = idx.deletedSources.find(s => s.reallyGone && s.primary.has(owner) && ref.where({ owner, rec: s.rec }));
     if (src) return { status: 'gone', file: src.path };
   }
+  // Code the project still has keeps the line a lost check, even when this diff never shows it.
+  // The assertion call itself (helper.assertTrue, Assert.assertEquals) is the check, not its subject.
+  const check = ref.kind === 'call' && /^(?:assert|expect$|fail$|verify$)/.test(ref.name);
+  const project = !check && (typeof ref.where?.project === 'function' ? ref.where.project(idx) : ref.where?.project === true);
+  const KEPT = { status: 'kept', file: null };
+  if (!idx.declared(ref.name)) return project ? KEPT : null;
+  if (!ref.where) return KEPT;
   // Declared in the diff, but not where this ref points. When the ref names its owner type and the
   // diff has no such type, it is a library name that happens to match (Items.DIAMOND). Otherwise
   // the diff may just not show the import, so the name still keeps the line from being excused.
   if (!idx.declaredIn(ref.name, ref.where)) {
-    return ref.where.loose && !idx.declaredIn(ref.name, ref.where.loose) ? null : { status: 'kept', file: null };
+    return !project && ref.where.loose && !idx.declaredIn(ref.name, ref.where.loose) ? null : KEPT;
   }
   if (ref.kind === 'type') {
     return idx.gone(ref.name, ref.where) ? { status: 'gone', file: idx.goneFrom(ref.name, ref.where) } : { status: 'kept', file: null };

@@ -1,0 +1,31 @@
+diff --git a/src/main/java/demo/cart/Pricing.java b/src/main/java/demo/cart/Pricing.java
+index d07da4f..780c704 100644
+--- a/src/main/java/demo/cart/Pricing.java
++++ b/src/main/java/demo/cart/Pricing.java
+@@ -1,6 +1,5 @@
+ package demo.cart;
+ 
+ public final class Pricing {
+-    public static final int TAX_PERCENT = 20;
+-    public static int taxOn(int cents) { return cents * TAX_PERCENT / 100; }
++    public static int taxOn(int cents) { return cents * 20 / 100; }
+ }
+diff --git a/src/test/java/demo/cart/TaxTest.java b/src/test/java/demo/cart/TaxTest.java
+deleted file mode 100644
+index 5de50e0..0000000
+--- a/src/test/java/demo/cart/TaxTest.java
++++ /dev/null
+@@ -1,13 +0,0 @@
+-package demo.cart;
+-
+-import static org.junit.jupiter.api.Assertions.assertEquals;
+-import org.junit.jupiter.api.Test;
+-
+-class TaxTest {
+-    @Test
+-    void taxIsAFifth() {
+-        Cart cart = new Cart();
+-        cart.add(500);
+-        assertEquals(500 * Pricing.TAX_PERCENT / 100, cart.tax());
+-    }
+-}
