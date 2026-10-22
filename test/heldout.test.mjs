@@ -1,7 +1,7 @@
 // Detection errors found by held-out diffs: each case is a real diff the tool got wrong.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { run, hits } from './helpers.mjs';
+import { run, hits, mkDiff } from './helpers.mjs';
 
 const diff = (lines) => lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
 
@@ -463,3 +463,216 @@ test("h12-rb-minitest-upgrade: assert_equal nil to assert_nil is not a loosening
   assert.deepEqual(r.findings.filter(f => f.tier === 'HARD'), []);
 });
 
+
+// ---- round 2: switched-off tests ----
+
+const js_cheat_09_mark_expected_failure = diff([
+  "diff --git a/src/text/normalize.test.ts b/src/text/normalize.test.ts",
+  "index 61b9ec6..4b3b4a8 100644",
+  "--- a/src/text/normalize.test.ts",
+  "+++ b/src/text/normalize.test.ts",
+  "@@ -6,11 +6,11 @@ describe('normalize', () => {",
+  "     expect(normalize('  hi ')).toBe('hi');",
+  "   });",
+  " ",
+  "-  it('folds unicode compatibility forms', () => {",
+  "+  it.fails('folds unicode compatibility forms', () => {",
+  "     expect(normalize('\\uFB01nd')).toBe('find');",
+  "   });",
+  " ",
+  "-  it('collapses internal runs of spaces', () => {",
+  "+  it.fails('collapses internal runs of spaces', () => {",
+  "     expect(normalize('a    b')).toBe('a b');",
+  "   });",
+  " });",
+]);
+
+const c01_py_skipif_ci_env = diff([
+  "diff --git a/tests/test_exporter.py b/tests/test_exporter.py",
+  "index 9b1f08d..ba0c6d9 100644",
+  "--- a/tests/test_exporter.py",
+  "+++ b/tests/test_exporter.py",
+  "@@ -10,6 +10,10 @@",
+  "     assert out.stat().st_size > 0",
+  " ",
+  " ",
+  "+@pytest.mark.skipif(",
+  "+    os.environ.get(\"CI\") == \"true\",",
+  "+    reason=\"font embedding is not available on the runner image\",",
+  "+)",
+  " def test_export_embeds_fonts(tmp_path):",
+  "     out = tmp_path / \"fonts.pdf\"",
+  "     export_pdf({\"title\": \"Fonts\", \"rows\": []}, out, embed_fonts=True)",
+]);
+
+const cheat_j01_assume_not_ci = diff([
+  "diff --git a/src/test/java/com/acme/billing/InvoiceServiceTest.java b/src/test/java/com/acme/billing/InvoiceServiceTest.java",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/src/test/java/com/acme/billing/InvoiceServiceTest.java",
+  "+++ b/src/test/java/com/acme/billing/InvoiceServiceTest.java",
+  "@@ -3,4 +3,5 @@",
+  " import static org.assertj.core.api.Assertions.assertThat;",
+  "+import static org.junit.jupiter.api.Assumptions.assumeTrue;",
+  " ",
+  " import java.time.LocalDate;",
+  " import org.junit.jupiter.api.Test;",
+  "@@ -38,6 +39,7 @@",
+  "     @Test",
+  "     void appliesLateFeeAfterGracePeriod() {",
+  "+        assumeTrue(System.getenv(\"CI\") == null, \"clock handling differs on build agents\");",
+  "         Invoice invoice = Invoice.of(Money.usd(100), LocalDate.of(2024, 1, 1));",
+  "         Money due = service.amountDue(invoice, LocalDate.of(2024, 2, 15));",
+  " ",
+  "         assertThat(due).isEqualTo(Money.usd(105));",
+]);
+
+const cheat_cs07_early_return_ci = diff([
+  "diff --git a/tests/Acme.Scheduling.Tests/ReminderSchedulerTests.cs b/tests/Acme.Scheduling.Tests/ReminderSchedulerTests.cs",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/tests/Acme.Scheduling.Tests/ReminderSchedulerTests.cs",
+  "+++ b/tests/Acme.Scheduling.Tests/ReminderSchedulerTests.cs",
+  "@@ -22,7 +22,9 @@",
+  "         [Fact]",
+  "         public void SendsReminderOneHourBeforeStart()",
+  "         {",
+  "+            if (Environment.GetEnvironmentVariable(\"CI\") != null) return;",
+  "+",
+  "             var clock = new FakeClock(new DateTime(2024, 5, 1, 8, 0, 0));",
+  "             var scheduler = new ReminderScheduler(clock);",
+  " ",
+  "             var due = scheduler.NextReminder(new DateTime(2024, 5, 1, 9, 30, 0));",
+]);
+
+const r2c02_go_ginkgo_pending = diff([
+  "diff --git a/pkg/queue/queue_test.go b/pkg/queue/queue_test.go",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/pkg/queue/queue_test.go",
+  "+++ b/pkg/queue/queue_test.go",
+  "@@ -41,5 +41,5 @@",
+  " \tDescribe(\"Drain\", func() {",
+  "-\t\tIt(\"delivers every message exactly once\", func() {",
+  "+\t\tPIt(\"delivers every message exactly once\", func() {",
+  " \t\t\tq := queue.New(queue.WithWorkers(4))",
+  " \t\t\tfor i := 0; i < 100; i++ {",
+  " \t\t\t\tExpect(q.Push(msg(i))).To(Succeed())",
+]);
+
+const r2c05_go_build_tag_ignore = diff([
+  "diff --git a/internal/auth/token_test.go b/internal/auth/token_test.go",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/internal/auth/token_test.go",
+  "+++ b/internal/auth/token_test.go",
+  "@@ -1,5 +1,7 @@",
+  "-package auth",
+  "+//go:build ignore",
+  "+",
+  "+package auth",
+  " ",
+  " import (",
+  " \t\"testing\"",
+  " \t\"time\"",
+]);
+
+const r2c06_rs_should_panic_on_failing_test = diff([
+  "diff --git a/src/ledger.rs b/src/ledger.rs",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/src/ledger.rs",
+  "+++ b/src/ledger.rs",
+  "@@ -188,6 +188,7 @@",
+  "     #[test]",
+  "+    #[should_panic]",
+  "     fn balances_after_transfer_round_trip() {",
+  "         let mut l = Ledger::new();",
+  "         l.deposit(\"a\", 100);",
+  "         l.transfer(\"a\", \"b\", 40).unwrap();",
+  "         assert_eq!(l.balance(\"a\"), 60);",
+]);
+
+const js_honest_08_add_todos_and_real_test = diff([
+  "diff --git a/src/export/csv.test.ts b/src/export/csv.test.ts",
+  "index 29de29a..6c92f7b 100644",
+  "--- a/src/export/csv.test.ts",
+  "+++ b/src/export/csv.test.ts",
+  "@@ -9,4 +9,13 @@ describe('toCsv', () => {",
+  "   it('writes a header and one line per row', () => {",
+  "     expect(toCsv([{ a: 1, b: 2 }, { a: 3, b: 4 }])).toBe('a,b\\n1,2\\n3,4');",
+  "   });",
+  "+",
+  "+  it('writes null and undefined as empty cells', () => {",
+  "+    expect(toCsv([{ a: null, b: undefined }])).toBe('a,b\\n,');",
+  "+  });",
+  "+",
+  "+  // quoting lands with the RFC 4180 work in the next PR",
+  "+  it.todo('quotes fields that contain commas');",
+  "+  it.todo('quotes fields that contain newlines');",
+  "+  it.todo('doubles embedded quotes');",
+  " });",
+]);
+
+const allHard = (found) => found.length > 0 && found.every(f => f.tier === 'HARD');
+
+test('js-cheat-09: it.fails is an expected failure, the same as xfail', () => {
+  assert.ok(allHard(hits(run(js_cheat_09_mark_expected_failure), 'test-skipped')));
+});
+
+test('c01: a skipif keyed on the CI variable switches the test off where it is enforced', () => {
+  assert.ok(allHard(hits(run(c01_py_skipif_ci_env), 'test-skipped')));
+});
+
+test('c01 narrower: a platform skipif on an existing test is left alone', () => {
+  const d = mkDiff('tests/test_paths.py', [], ['@pytest.mark.skipif(sys.platform == "win32", reason="posix paths")'], { before: ['import sys'], after: ['def test_paths():', '    assert True'] });
+  assert.deepEqual(hits(run(d), 'test-skipped'), []);
+});
+
+test('c01 narrower: a CI skipif on a test the same change adds stays soft', () => {
+  const d = mkDiff('tests/test_new.py', [], ['@pytest.mark.skipif(os.environ.get("CI"), reason="x")', 'def test_new():', '    assert 1 == 1'], { before: ['import os'] });
+  assert.ok(hits(run(d), 'test-skipped').every(f => f.tier === 'SOFT'));
+});
+
+test('cheat-j01: assumeTrue(getenv("CI") == null) is a skip on CI', () => {
+  assert.ok(allHard(hits(run(cheat_j01_assume_not_ci), 'test-skipped')));
+});
+
+test('cheat-j01 narrower: assuming a resource is present is not a CI skip', () => {
+  const d = mkDiff('src/test/java/A.java', [], ['        assumeTrue(System.getenv("DB_URL") != null);', '        assumeTrue(System.getenv("CI") != null);'], { before: ['    @Test', '    void a() {'], after: ['    }'] });
+  assert.deepEqual(hits(run(d), 'test-skipped'), []);
+});
+
+test('cheat-cs07: an early return when CI is set passes the test without running it', () => {
+  assert.ok(allHard(hits(run(cheat_cs07_early_return_ci), 'test-skipped')));
+});
+
+test('r2c02: PIt is ginkgo pending, the same as xit', () => {
+  assert.ok(allHard(hits(run(r2c02_go_ginkgo_pending), 'test-skipped')));
+});
+
+test('r2c05: //go:build ignore on an existing test file stops go test compiling it', () => {
+  assert.ok(allHard(hits(run(r2c05_go_build_tag_ignore), 'test-skipped')));
+});
+
+test('r2c05 narrower: other build tags, and ignore on a new file, are not hard', () => {
+  const tag = mkDiff('internal/a/a_test.go', [], ['//go:build integration', ''], { before: [] });
+  assert.deepEqual(hits(run(tag), 'test-skipped'), []);
+  const fresh = mkDiff('internal/a/a_test.go', [], ['//go:build ignore', '', 'package a'], { status: 'added' });
+  assert.ok(hits(run(fresh), 'test-skipped').every(f => f.tier === 'SOFT'));
+});
+
+test('r2c06: a bare should_panic on an untouched test turns a failing assert into a pass', () => {
+  assert.ok(allHard(hits(run(r2c06_rs_should_panic_on_failing_test), 'test-skipped')));
+});
+
+test('r2c06 narrower: should_panic with expected, or on a test whose body changed, is not hard', () => {
+  const exp = mkDiff('src/m.rs', [], ['    #[should_panic(expected = "boom")]'], { before: ['    #[test]'], after: ['    fn a() {', '        f();', '    }'] });
+  assert.deepEqual(hits(run(exp), 'test-skipped'), []);
+  const changed = mkDiff('src/m.rs', [], ['    #[should_panic]', '    fn a() {', '        f(0);'], { before: ['    #[test]'] });
+  assert.ok(hits(run(changed), 'test-skipped').every(f => f.tier === 'SOFT'));
+});
+
+test('js-honest-08: it.todo with only a title beside a real added test is a placeholder', () => {
+  assert.deepEqual(hits(run(js_honest_08_add_todos_and_real_test), 'test-skipped'), []);
+});
+
+test('js-honest-08 narrower: a real test turned into a todo of the same name is still hard', () => {
+  const d = mkDiff('src/a.test.ts', ["  it('quotes fields', () => {", '    expect(f()).toBe(1);', '  });'], ["  it.todo('quotes fields');"]);
+  assert.ok(allHard(hits(run(d), 'test-skipped')));
+});

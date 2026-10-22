@@ -65,12 +65,13 @@ function nextCodeLine(f, a, skip = 0) {
 
 const SKIP = {
   // The second branch is an alias made of a skip ("const itX = it.skip"); a ternary there is only a conditional skip.
-  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(/,
+  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme|fails|failing)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\b(it|test|describe)\.skipIf\s*\(\s*process\.env\.(CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_URL|TF_BUILD)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(/,
   py: /@pytest\.mark\.(skip|xfail)\b|@pytest\.mark\.skipif\s*\(\s*(True|1)\b|@unittest\.(skip|expectedFailure)\b|@unittest\.skipIf\s*\(\s*(True|1)\b|@unittest\.skipUnless\s*\(\s*(False|0)\b|\bpytest\.(skip|xfail)\s*\(|\bself\.skipTest\s*\(|\braise\s+(unittest\.)?SkipTest\b/,
-  jvm: /@(Disabled|Ignore|DisabledIf\w*|Ignored)\b|\bAssumptions\.assume\w*\s*\(\s*false|\bassumeTrue\s*\(\s*false|@Test\s*\(\s*enabled\s*=\s*false/,
-  go: /\bt\.(Skip|SkipNow|Skipf)\s*\(/,
+  jvm: /@(Disabled|Ignore|DisabledIf\w*|Ignored)\b|\bAssumptions\.assume\w*\s*\(\s*false|\bassumeTrue\s*\(\s*false|@Test\s*\(\s*enabled\s*=\s*false|\bassumeTrue\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*==\s*null|\bassumeFalse\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*!=\s*null|^\s*if\s*\(\s*System\.getenv\s*\(\s*"(CI|GITHUB_ACTIONS)"\s*\)\s*!=\s*null\s*\)\s*\{?\s*return\s*;/,
+  // PIt and XIt are ginkgo's pending markers.
+  go: /\bt\.(Skip|SkipNow|Skipf)\s*\(|(?<![.\w])[PX](It|Describe|Context|When|Specify|Entry|DescribeTable|DescribeTableSubtree)\s*\(/,
   rust: /#\[\s*ignore\b/,
-  cs: /\[\s*Ignore\b|\bSkip\s*=\s*"|\[\s*Fact\s*\(\s*Skip|\[\s*Theory\s*\(\s*Skip|Assert\.Inconclusive\s*\(/,
+  cs: /\[\s*Ignore\b|\bSkip\s*=\s*"|\[\s*Fact\s*\(\s*Skip|\[\s*Theory\s*\(\s*Skip|Assert\.Inconclusive\s*\(|^\s*if\s*\(\s*(System\.)?Environment\.GetEnvironmentVariable\s*\(\s*"(CI|GITHUB_ACTIONS|TF_BUILD|JENKINS_URL)"\s*\)\s*(!=\s*null|is\s+not\s+null)\s*\)\s*\{?\s*return\s*;/,
   // A bare skip or pending, or one given a message or a block. "pending = ..." is a local variable.
   rb: /^\s*(skip|pending)(?=\s*$|\s*\(?\s*['"]|\s+do\b)|\bxit\b|\bxdescribe\b|\bxcontext\b/,
 };
@@ -307,20 +308,27 @@ function testScope(ctx, f) {
   };
 }
 
+// Skips that only happen where results are enforced. skipUnless and a negated test run on CI only, so they are left out.
+const CI_VARS = 'CI|GITHUB_ACTIONS|GITLAB_CI|CIRCLECI|TRAVIS|BUILDKITE|JENKINS_URL|TF_BUILD|TEAMCITY_VERSION|CONTINUOUS_INTEGRATION';
+const PY_CI_ENV = new RegExp(`(?<!not\\s)\\b(os\\.environ(\\.get)?|os\\.getenv)\\s*[\\(\\[]\\s*['"](${CI_VARS})['"]|(?<!not\\s)['"](CI|GITHUB_ACTIONS)['"]\\s+in\\s+os\\.environ`);
+const PY_SKIPIF = /^\s*@(pytest\.mark\.skipif|unittest\.skipIf)\s*\(/;
+const JS_TODO_TITLE = /\b(it|test)\.todo\s*\(\s*(['"`])((?:(?!\2).)*)\2\s*\)\s*;?\s*$/;
+const GO_IGNORE_TAG = /^\s*\/\/\s*(go:build|\+build)\s+.*(?<!!)\bignore\b/;
+
 const CONDITIONAL_OPENER = /^\s*(\}\s*)?(if|unless|elif|else\s+if)\b/;
 const ATTRIBUTE_LINE = /^\s*(@|#\[|\[)/;
 const FN_HEADER = /^\s*(?:(?:pub\s+)?(?:async\s+)?fn\s+(\w+)|func\s+(Test\w*)|(?:async\s+)?def\s+(test\w*)|(?:public\s+|private\s+|protected\s+)?(?:static\s+)?void\s+(\w+))/;
 
 // Is the skip marker `a` inside an "if", or does it belong to a test that this same change adds?
 // Either way it does not switch off a test that was running before.
-function skipIsHarmless(f, a) {
+function skipIsHarmless(f, a, { ci = false } = {}) {
   if (f.status === 'added') return true;
   const lines = hunkLines(f, a).filter(l => l.newLine != null);
   const i = lines.findIndex(l => l.kind === '+' && l.newLine === a.line);
   if (i < 0) return false;
   for (let j = i - 1; j >= 0; j--) {
     if (!lines[j].text.trim() || isCommentLine(lines[j].text)) continue;
-    if (CONDITIONAL_OPENER.test(lines[j].text)) return true;
+    if (CONDITIONAL_OPENER.test(lines[j].text) && !ci) return true;
     break;
   }
   // The header the marker belongs to: below an attribute, above a statement in a body. A marker
@@ -338,7 +346,22 @@ function skipIsHarmless(f, a) {
   return false;
 }
 
-const STRING_LITERAL = /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g;
+// A python skip marker whose condition reads a CI variable: the decorator and its next lines, or
+// a pytest.skip( under an "if" on one.
+function pySkipsOnCi(f, a) {
+  const lines = hunkLines(f, a).filter(l => l.newLine != null);
+  const i = lines.findIndex(l => l.kind === '+' && l.newLine === a.line);
+  if (i < 0) return false;
+  if (PY_SKIPIF.test(a.text)) return PY_CI_ENV.test(lines.slice(i, i + 4).map(l => l.text).join('\n'));
+  if (!/\b(pytest\.skip|self\.skipTest)\s*\(/.test(a.text)) return false;
+  for (let j = i - 1; j >= 0; j--) {
+    if (!lines[j].text.trim() || isCommentLine(lines[j].text)) continue;
+    return CONDITIONAL_OPENER.test(lines[j].text) && PY_CI_ENV.test(lines[j].text);
+  }
+  return false;
+}
+
+const STRING_LITERAL =/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g;
 const NUMBER_LITERAL = /-?\b\d+(\.\d+)?([eE][+-]?\d+)?\b/g;
 const skeleton = (t) => t.trim().replace(STRING_LITERAL, 'S').replace(NUMBER_LITERAL, 'N').replace(/\s+/g, ' ');
 const collapse = (t) => t.trim().replace(/\s+/g, ' ');
@@ -389,11 +412,40 @@ export const RULES = [
     for (const { f, a, p } of addedLines(ctx, () => true)) {
       const lang = language(p);
       let hit;
-      if (lang === 'rust') hit = SKIP.rust.test(a.text);
-      else if (!ctx.isTest(p)) continue;
+      if (lang === 'rust') {
+        // A bare should_panic on a test whose body did not change turns a failing assert into a pass.
+        if (/#\[\s*should_panic\b/.test(a.text)) {
+          if (/expected\s*=/.test(a.text)) continue;
+          const bodyChanged = f.added.some(x => x.hunk === a.hunk && x !== a && x.text.trim() && !isCommentLine(x.text) && !/^\s*#\[/.test(x.text));
+          add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a) || bodyChanged);
+          continue;
+        }
+        hit = SKIP.rust.test(a.text);
+      } else if (!ctx.isTest(p)) continue;
       else if (lang === 'other') hit = Object.values(SKIP).some(r => r.test(a.text));
       else hit = SKIP[lang].test(a.text);
+      if (lang === 'js') {
+        // it.todo('title') next to a real test the same change adds is a placeholder for the next one.
+        // It is a switched-off test when it replaces a real one, and a lone todo is still reported.
+        const todo = JS_TODO_TITLE.exec(a.text);
+        if (todo) {
+          if (f.removed.some(r => TEST_HEADER.test(r.text) && r.text.includes(todo[3]))) {
+            add(p, a.line, null, a.text);
+            continue;
+          }
+          const addsRealTest = f.added.some(x => !isCommentLine(x.text) && TEST_HEADER.test(x.text) && !/\.(todo|skip|fixme|fails|failing)\b/.test(x.text) && /=>|function/.test(x.text));
+          if (addsRealTest) continue;
+        }
+      }
+      if (!hit && lang === 'py' && pySkipsOnCi(f, a)) {
+        add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a, { ci: true }));
+        continue;
+      }
       if (hit) add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a) || (lang === 'js' && CONDITIONAL_SKIP_ALIAS.test(a.text)));
+    }
+    // "//go:build ignore" in a test file means go test never compiles it. It is a comment, so addedLines is told to look.
+    for (const { f, a, p } of addedLines(ctx, (p) => ctx.isTest(p) && language(p) === 'go', { comments: true })) {
+      if (GO_IGNORE_TAG.test(a.text)) add(p, a.line, null, a.text, undefined, f.status === 'added');
     }
   }),
 
