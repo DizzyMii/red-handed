@@ -426,21 +426,30 @@ function removedBlock(f, r, isHeader) {
 
 // The removed lines of the test that removed line r sits in, when that test was removed whole:
 // its header and every line from there down to r are removed lines. Null otherwise.
+// Worked out once a hunk: for each removed old line number, its block or null.
+const wholeCache = new WeakMap();
 function wholeTestAround(f, r) {
-  const lines = f.hunks[r.hunk]?.lines ?? [];
-  const at = lines.findIndex(l => l.kind === '-' && l.oldLine === r.line);
-  for (let j = at - 1; j >= 0; j--) {
-    if (lines[j].kind !== '-') return null;
-    if (!isCommentLine(lines[j].text) && TEST_HEADER.test(lines[j].text)) {
+  const h = f.hunks[r.hunk];
+  if (!h) return null;
+  let map = wholeCache.get(h);
+  if (!map) {
+    map = new Map();
+    const lines = h.lines;
+    const header = (t) => !isCommentLine(t) && TEST_HEADER.test(t);
+    for (let j = 0; j < lines.length; j++) {
+      if (lines[j].kind !== '-' || !header(lines[j].text)) continue;
       const block = [];
-      for (let k = j; k < lines.length && lines[k].kind === '-'; k++) {
-        if (k > j && TEST_HEADER.test(lines[k].text)) break;
+      let k = j;
+      for (; k < lines.length && lines[k].kind === '-'; k++) {
+        if (k > j && header(lines[k].text)) break;
         block.push(lines[k].text);
       }
-      return block;
+      for (let m = j + 1; m < k; m++) map.set(lines[m].oldLine, block);
+      j = k - 1;
     }
+    wholeCache.set(h, map);
   }
-  return null;
+  return map.get(r.line) ?? null;
 }
 
 // The lines of `f` the assertion rules may judge: all of them in a test file, and in a Rust source
@@ -1074,7 +1083,9 @@ function moveCoverage(ctx) {
       if (!isAssertLine(a.text)) continue;
       const key = moveKey(a.text, junit);
       if (!pool.has(key)) pool.set(key, []);
-      pool.get(key).push({ g, a, live: collected && inLiveTest(g, a) });
+      // Only asked of a line some deleted check matches, so it is worked out when first read.
+      let live;
+      pool.get(key).push({ g, a, get live() { return (live ??= collected && inLiveTest(g, a)); } });
     }
   }
   const used = new Set();
@@ -1461,11 +1472,19 @@ export const RULES = [
       return null;
     };
     const featureMessage = (f) => {
-      // Every check it made has to reach code this change removes, and none may reach code that
-      // stays. One small helper deleted next to a test of code that is kept excuses nothing.
+      // Every check that names the project's code has to reach code this change removes, and
+      // nothing else it names may stay untouched. One check on code that stays is a lost check, so
+      // one small helper deleted next to a test of kept code excuses nothing. A check that names
+      // nothing the project has (a sanity check on a fixture or a file) neither excuses nor blocks.
       const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => statementOf(f, r, '-'));
-      const gone = checks.length ? removedWithFeature(ctx, f, checks, { shrunk: true }) : null;
-      if (!gone || !checks.every(t => subjectRefs(ctx, f, t).some(q => q.status === 'gone' || (q.status === 'arity' && q.shrunk)))) return null;
+      const idx = sourceIndex(ctx);
+      const out = (q) => q.status === 'gone' || (q.status === 'arity' && q.shrunk);
+      const edited = (q) => q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where);
+      const per = checks.map(t => subjectRefs(ctx, f, t));
+      const ok = (refs) => !refs.length || (refs.some(out) && refs.every(q => out(q) || edited(q)));
+      const first = per.flat().find(out);
+      if (!first || !per.every(ok)) return null;
+      const gone = { symbol: first.name, file: first.file, reshaped: first.status === 'arity' };
       const source = goneSourceFor(f);
       if (source) return `A test file was deleted together with the code it tests (${source} is deleted in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
       if (gone.reshaped) return `A test file was deleted together with the code it tests (${gone.symbol} loses a parameter it was called with in ${gone.file}). Check the behaviour it pinned was meant to go.`;
