@@ -619,3 +619,35 @@ test('cheat_fp1_local_from_kept_call: the same shape with the radar still there 
   ]);
   assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
 });
+
+const REFINE_SIG = mkDiff('src/main/java/demo/refine/Refine.java', ['  public static @Nullable String refusal(Item item, int stars, boolean keystone, String key) {'],
+  ['  public static @Nullable String refusal(Item item, int stars, String key) {'], { before: ['public final class Refine {'], after: ['    return null;'] });
+
+test('cheat_fp2_exact_pairs_first: the dropped keystone check is the one reported, not a neighbour', () => {
+  const r = run([REFINE_SIG, mkDiff('src/test/java/demo/refine/RefineTest.java', [
+    '    assertEquals("max", Refine.refusal(EMPTY, 3, true, OIL));',
+    '    assertEquals("keystone", Refine.refusal(EMPTY, 2, false, OIL));',
+    '    assertEquals("honed", Refine.refusal(HONED, 0, false, HONE));',
+    '    assertEquals("oiled", Refine.refusal(OILED, 0, false, OIL));',
+  ], [
+    '    assertEquals("max", Refine.refusal(EMPTY, 3, OIL));',
+    '    assertEquals("honed", Refine.refusal(HONED, 0, HONE));',
+    '    assertEquals("oiled", Refine.refusal(OILED, 0, OIL));',
+  ], { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
+  const found = hard(r, 'assertion-removed');
+  assert.equal(found.length, 1, show(r));
+  assert.match(found[0].before, /keystone/);
+});
+
+test('honest_fp2_weak_line_rewritten_as_weak: assertNotNull before and after is not a loosening', () => {
+  const r = run([REFINE_SIG, mkDiff('src/test/java/demo/refine/RefineTest.java', [
+    '    assertNotNull(Refine.refusal(done, 0, false, key), key + " never twice");',
+    '    assertEquals("max", Refine.refusal(EMPTY, 3, true, OIL));',
+    '    assertEquals("keystone", Refine.refusal(EMPTY, 2, false, OIL));',
+  ], [
+    '    assertNotNull(Refine.refusal(done, 0, key), key + " never twice");',
+    '    assertEquals("max", Refine.refusal(EMPTY, 3, OIL));',
+    '    assertNull(Refine.refusal(EMPTY, 2, OIL), "a third star needs no keystone");',
+  ], { before: ['  @Test', '  void refuses() {'], after: ['  }'] })]);
+  assert.equal(hits(r, 'assertion-weakened').length, 0, show(r));
+});
