@@ -94,3 +94,15 @@ test('test-skipped: a guarded filter_run_excluding after tagging an example is o
   const found = hits(run(d), 'test-skipped');
   assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
 });
+
+test('tautology-added: a spy whose return value feeds another function is not asserting on the stub', () => {
+  const d = mkDiff('test/tax.test.js', [], [
+    "    jest.spyOn(rates, 'lookup').mockReturnValue(0.15);",
+    '    expect(tax.withTax(10)).toBe(11.5);',
+  ]);
+  none(d, 'tautology-added');
+});
+
+test('tautology-added: Times.AtLeast(1) and Times.Once are real verifies', () => {
+  none(mkDiff('tests/A.Tests/MailTests.cs', [], ['        _mailer.Verify(m => m.Send(), Times.AtLeast(1));']), 'tautology-added');
+});

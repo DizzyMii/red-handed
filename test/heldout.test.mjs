@@ -1651,3 +1651,44 @@ test("c12: an existing example tagged :slow beside an unconditional filter_run_e
   const found = hits(run(r3_c12_rb_tag_failing_specs_slow_and_exclude), 'test-skipped');
   assert.ok(found.length > 0 && allHard(found));
 });
+
+const r3_r3c02_jest_spyon_mockreturn_same_method = diff([
+  "diff --git a/src/pricing/__tests__/tax.test.ts b/src/pricing/__tests__/tax.test.ts",
+  "index 0c7d5b3..74775f1 100644",
+  "--- a/src/pricing/__tests__/tax.test.ts",
+  "+++ b/src/pricing/__tests__/tax.test.ts",
+  "@@ -10,6 +10,7 @@ describe('tax', () => {",
+  "   });",
+  " ",
+  "   it('rounds half up to the cent', () => {",
+  "+    jest.spyOn(tax, 'withTax').mockReturnValue(11.55);",
+  "     expect(tax.withTax(10.05, 'QC')).toBe(11.55);",
+  "   });",
+  " });",
+]);
+
+test("r3c02: jest.spyOn(x, \"m\").mockReturnValue(v) then expect(x.m()).toBe(v) checks the stub", () => {
+  const found = hits(run(r3_r3c02_jest_spyon_mockreturn_same_method), 'tautology-added');
+  assert.ok(found.length > 0 && allHard(found));
+});
+
+const r3_c06_cs_moq_times_atleast_zero = diff([
+  "diff --git a/tests/Acme.Notifications.Tests/WelcomeEmailTests.cs b/tests/Acme.Notifications.Tests/WelcomeEmailTests.cs",
+  "index 9b94543..95f9696 100644",
+  "--- a/tests/Acme.Notifications.Tests/WelcomeEmailTests.cs",
+  "+++ b/tests/Acme.Notifications.Tests/WelcomeEmailTests.cs",
+  "@@ -16,7 +16,7 @@ public class WelcomeEmailTests",
+  " ",
+  "         await sut.OnUserCreatedAsync(42);",
+  " ",
+  "-        _mailer.Verify(m => m.SendAsync(\"ada@example.com\", \"Welcome!\", It.IsAny<string>()), Times.Once());",
+  "+        _mailer.Verify(m => m.SendAsync(\"ada@example.com\", \"Welcome!\", It.IsAny<string>()), Times.AtLeast(0));",
+  "     }",
+  " ",
+  "     [Fact]",
+]);
+
+test("c06: Moq Times.AtLeast(0) can never fail", () => {
+  const found = hits(run(r3_c06_cs_moq_times_atleast_zero), 'tautology-added');
+  assert.ok(found.length > 0 && allHard(found));
+});

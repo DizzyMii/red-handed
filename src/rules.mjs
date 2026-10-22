@@ -120,6 +120,8 @@ const TAUTOLOGY = [
   /\bassert\s+true\b/,
   /\bassert_equal\s+([^\s,]+)\s*,\s*\1\s*$/,
   /\b([\w.]+)\s+shouldBe\s+\1\s*$/,
+  // A verify that accepts any number of calls, zero included.
+  /\bTimes\.AtLeast\s*\(\s*0\s*\)|\bTimes\.Between\s*\(\s*0\s*,\s*int\.MaxValue|\bTimes\.AtMost\s*\(\s*int\.MaxValue\s*\)|\b(?:Mockito\.)?atLeast\s*\(\s*0\s*\)/,
 ];
 
 const TEST_DETECTION = /process\.env\.(NODE_ENV|BABEL_ENV)\s*[!=]==?\s*['"`]test['"`]|['"`]test['"`]\s*[!=]==?\s*process\.env\.NODE_ENV|process\.env\.(JEST_WORKER_ID|VITEST|VITEST_WORKER_ID|MOCHA|CI_TEST|PLAYWRIGHT_TEST)|import\.meta\.vitest\b|['"]pytest['"]\s+in\s+sys\.modules|['"]unittest['"]\s+in\s+sys\.modules|PYTEST_CURRENT_TEST|sys\._called_from_test|\btesting\.Testing\s*\(\s*\)|\bflag\.Lookup\s*\(\s*"test\.v"\s*\)|strings\.HasSuffix\s*\(\s*os\.Args\[0\]\s*,\s*"\.test"\s*\)|Class\.forName\s*\(\s*"org\.junit|System\.getProperty\s*\(\s*"(surefire\.[\w.]+|basedir\.surefire|org\.gradle\.test\.worker|junit\.[\w.]+|idea\.test\.[\w.]+)"|\bisRunningUnderTest\b|\bisRunningInTest\b|\bIS_TEST(ING)?\b|Rails\.env\.test\?|ENV\[['"]RAILS_ENV['"]\]\s*==\s*['"]test['"]|\bcfg!\s*\(\s*test\s*\)|typeof\s+(jest|vitest|describe|it|mocha|jasmine)\s*[!=]==?\s*['"](undefined|function)|\b(os\.environ(\.get)?|os\.getenv)\s*[\(\[]\s*['"](TESTING|TEST|IS_TEST|PYTEST\w*)['"]|GetAssemblies\(\).*([xX][uU]nit|[nN][uU]nit|MSTest)|Environment\.GetEnvironmentVariable\s*\(\s*"(\w*TEST\w*)"/;
@@ -571,6 +573,19 @@ function patchedReturnAsserted(f, a) {
     && x.text.includes('.' + attr + '(') && x.text.replace(/\s+/g, '').includes(value));
 }
 
+// jest.spyOn(tax, 'withTax').mockReturnValue(X) followed, within a few lines, by an assert on
+// tax.withTax(...) with X. The assert can be a line the change left alone: the spy is what is new.
+const SPY_RETURN = /\b(?:jest|vi)\.spyOn\s*\(\s*([\w.$]+)\s*,\s*['"](\w+)['"]\s*\)\s*\.mock(?:Return|Resolved)Value(?:Once)?\s*\(/;
+function spyReturnAsserted(f, a) {
+  const m = SPY_RETURN.exec(a.text);
+  if (!m) return false;
+  const value = argUpToClose(a.text.slice(m.index + m[0].length)).replace(/\s+/g, '');
+  if (!value) return false;
+  const call = m[1] + '.' + m[2] + '(';
+  const { lines, i } = newSide(f, a);
+  return lines.slice(i + 1, i + 9).some(l => isAssertLine(l.text) && l.text.includes(call) && l.text.replace(/\s+/g, '').includes(value));
+}
+
 // "expect(x).to eq(120.0)" turned into "expect(x).to eq(a + b)": the same call, a literal swapped for an expression.
 function literalToExpression(oldText, newText) {
   const parts = [oldText, newText].map(t => {
@@ -939,7 +954,7 @@ export const RULES = [
       const scope = ctx.isTest(f.newPath) ? { added: f.added } : testScope(ctx, f);
       for (const a of scope?.added ?? []) {
         if (isCommentLine(a.text)) continue;
-        if (TAUTOLOGY.some(r => r.test(a.text)) || patchedReturnAsserted(f, a)) { add(f.newPath, a.line, null, a.text); continue; }
+        if (TAUTOLOGY.some(r => r.test(a.text)) || patchedReturnAsserted(f, a) || spyReturnAsserted(f, a)) { add(f.newPath, a.line, null, a.text); continue; }
         const self = selfComparison(f, a);
         if (self) add(f.newPath, a.line, null, a.text, undefined, self === 'soft');
       }
