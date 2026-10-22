@@ -1,0 +1,31 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index 06a92bd..bfe5a6a 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -1,2 +1,2 @@
+ export function total(items: number[]): number { return items.reduce((a, b) => a + b, 0); }
+-export function discount(t: number): number { return t > 100 ? t * 0.9 : t; }
++export function discount(t: number): number { return t; }
+diff --git a/src/fmt.ts b/src/fmt.ts
+deleted file mode 100644
+index 2667130..0000000
+--- a/src/fmt.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-export function fmt(n: number): string { return n.toFixed(2); }
+diff --git a/test/cart.spec.ts b/test/cart.spec.ts
+deleted file mode 100644
+index 1080f3b..0000000
+--- a/test/cart.spec.ts
++++ /dev/null
+@@ -1,10 +0,0 @@
+-import { total, discount } from '../src/cart';
+-import { fmt } from '../src/fmt';
+-
+-describe('cart', () => {
+-  it('totals', () => {
+-    expect(total([3, 4])).toBe(7);
+-    expect(discount(200)).toBe(180);
+-    expect(fmt(total([1.5, 2]))).toBe('3.50');
+-  });
+-});

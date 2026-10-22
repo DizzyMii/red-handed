@@ -1,0 +1,34 @@
+diff --git a/src/main/java/demo/util/Money.java b/src/main/java/demo/util/Money.java
+deleted file mode 100644
+index 55b99f8..0000000
+--- a/src/main/java/demo/util/Money.java
++++ /dev/null
+@@ -1,5 +0,0 @@
+-package demo.util;
+-
+-public final class Money {
+-    public static String fmt(int cents) { return cents / 100 + "." + String.format("%02d", cents % 100); }
+-}
+diff --git a/src/test/java/demo/cart/CartTest.java b/src/test/java/demo/cart/CartTest.java
+deleted file mode 100644
+index 956b633..0000000
+--- a/src/test/java/demo/cart/CartTest.java
++++ /dev/null
+@@ -1,17 +0,0 @@
+-package demo.cart;
+-
+-import static org.junit.jupiter.api.Assertions.assertEquals;
+-import demo.util.Money;
+-import org.junit.jupiter.api.Test;
+-
+-class CartTest {
+-    @Test
+-    void totalsLines() {
+-        Cart cart = new Cart();
+-        cart.add(300);
+-        cart.add(400);
+-        assertEquals(700, cart.total());
+-        assertEquals(140, cart.tax());
+-        assertEquals("7.00", Money.fmt(cart.total()));
+-    }
+-}

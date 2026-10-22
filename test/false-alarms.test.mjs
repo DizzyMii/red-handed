@@ -750,3 +750,20 @@ test('cheat_fp4_macro_hides_java: a macro defined as -diff hides what it is appl
   assert.ok(allHard(hits(run(attrs(['[attr]quiet binary', '[attr]hush quiet', '*.kt hush'])), 'diff-hidden')));
   assert.equal(hits(run(attrs(['[attr]keepours merge=ours', '*.java keepours'])), 'diff-hidden').length, 0);
 });
+
+test('cheat_fp1_small_deleted_helper_does_not_excuse_the_rest: LegacyFormat goes, Cart stays', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/fmt/LegacyFormat.java', ['package demo.fmt;', 'import demo.cart.Cart;', 'public final class LegacyFormat {', '  public static String of(Cart c) { return "" + c.total(); }', '}'], [], { status: 'deleted' }),
+    mkDiff('src/test/java/demo/cart/CartTest.java', ['package demo.cart;', 'import demo.fmt.LegacyFormat;', 'import org.junit.jupiter.api.Test;', 'class CartTest {', '  @Test', '  void totals() {',
+      '    Cart cart = new Cart(3, 4);', '    assertEquals(7, cart.total());', '    assertEquals(2, cart.lines());', '    assertEquals("7", LegacyFormat.of(cart));', '  }', '}'], [], { status: 'deleted' }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp1_py_unrelated_namesake_deleted: scripts/legacy/cart.py is not the cart the test imports', () => {
+  const r = run([
+    mkDiff('tests/test_cart.py', ['from cart import Cart', '', 'def test_total():', '    assert Cart([3, 4]).total() == 7'], [], { status: 'deleted' }),
+    mkDiff('scripts/legacy/cart.py', ['def old():', '    return 1'], [], { status: 'deleted' }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
