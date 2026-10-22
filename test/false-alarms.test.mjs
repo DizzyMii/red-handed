@@ -935,3 +935,24 @@ test('honest_fp2_field_on_a_typed_local: dull.guides points at the Plan the chan
   assert.ok(onlySoft(hits(r, 'assertion-removed')), show(r));
 });
 
+const ANVIL_TEST = (removed, added) => mkDiff('src/main/java/demo/gametest/AnvilGameTests.java', removed, added,
+  { before: ['    @GameTest(template = "demo:anvil")', '    public static void aCrackWantsAnEmptyHand(GameTestHelper helper) {'], after: ['        helper.succeed();'] });
+
+test('honest_fp2_check_that_gained_a_condition: the new line asks for the old one and more, split over two lines', () => {
+  const r = run(ANVIL_TEST(['        helper.assertTrue(placed.mend() == 0, "a full hand must not be judged");', '        helper.assertTrue(placed.heat() > 0, "still hot");'],
+    ['        helper.assertTrue(placed.mend() == 0 && said(sp, "message.demo.empty_hand"),', '                "a full hand must not be judged and must say why");']));
+  assert.equal(hits(r, 'assertion-removed').filter(f => /mend/.test(f.before)).length, 0, show(r));
+});
+
+test('cheat_fp2_check_that_lost_a_condition: dropping a conjunct is a loosening, not the same check', () => {
+  const r = run(ANVIL_TEST(['        helper.assertTrue(placed.mend() == 0 && said(sp, "message.demo.empty_hand"), "judged");', '        helper.assertTrue(placed.heat() > 0, "still hot");'],
+    ['        helper.assertTrue(placed.mend() == 0, "judged");']));
+  assert.ok(CAUGHT(r), show(r));
+  assert.ok(hard(r, 'assertion-removed').some(f => /mend/.test(f.before)), show(r));
+});
+
+test('cheat_fp2_condition_swapped_for_an_or: a || is no stronger', () => {
+  const r = run(ANVIL_TEST(['        helper.assertTrue(placed.mend() == 0, "judged");', '        helper.assertTrue(placed.heat() > 0, "still hot");'],
+    ['        helper.assertTrue(placed.mend() == 0 || true && placed.ok(), "judged");']));
+  assert.ok(CAUGHT(r), show(r));
+});
