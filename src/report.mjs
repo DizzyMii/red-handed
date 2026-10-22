@@ -103,3 +103,11 @@ export function markdown(result) {
 export function json(result) {
   return JSON.stringify(result, null, 2) + '\n';
 }
+
+export function rulesList(rules, { color = false } = {}) {
+  const width = Math.max(...rules.map(r => r.id.length)) + 2;
+  return rules.map(r => {
+    const tier = paint(color, r.tier === 'HARD' ? '31' : '33', r.tier.padEnd(6));
+    return `${tier}${r.id.padEnd(width)}${r.why}`;
+  }).join('\n') + '\n';
+}

@@ -3,7 +3,8 @@ import path from 'node:path';
 import { version } from './version.mjs';
 import { scan } from './scan.mjs';
 import { localSource, fileSource, stdinSource, prSource, parsePrSpec } from './sources.mjs';
-import { terminal, markdown, json } from './report.mjs';
+import { terminal, markdown, json, rulesList } from './report.mjs';
+import { RULES } from './rules.mjs';
 
 const HELP = `red-handed: catch AI agents cheating on tests in a code diff
 
@@ -102,6 +103,10 @@ export async function main(argv = [], io = {}) {
   }
   try {
     const opts = parseArgs(argv);
+    if (opts.target === 'rules') {
+      io.stdout.write(rulesList(RULES, { color: colorOn(opts, io) }));
+      return 0;
+    }
     const source = await buildSource(opts, io);
     const result = scan(source);
     if (opts.format === 'json') io.stdout.write(json(result));

@@ -4,7 +4,9 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { main } from '../src/cli.mjs';
+import { RULES } from '../src/rules.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bin = path.join(root, 'bin', 'red-handed.mjs');
@@ -63,4 +65,21 @@ test('bin runs main and exits with its code', () => {
   assert.match(help.stdout, /Usage:/);
   const bad = spawnSync(process.execPath, [bin, '--bogus'], { encoding: 'utf8' });
   assert.equal(bad.status, 2);
+});
+
+test('rules lists every rule, one per line, hard first', async () => {
+  const { out, io } = capture();
+  assert.equal(await main(['rules'], io), 0);
+  const lines = out.stdout.trimEnd().split('\n');
+  assert.equal(lines.length, RULES.length);
+  assert.match(lines[0], /^HARD {2}test-deleted {2,}A test file was deleted/);
+  assert.match(lines.at(-1), /^SOFT {2}diff-truncated {2,}The diff was too large/);
+  for (const r of RULES) assert.ok(out.stdout.includes(r.id));
+  assert.doesNotMatch(out.stdout, /\x1b\[/);
+});
+
+test('rules needs no git repository and no network', () => {
+  const r = spawnSync(process.execPath, [bin, 'rules'], { encoding: 'utf8', cwd: os.tmpdir() });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /test-skipped/);
 });
