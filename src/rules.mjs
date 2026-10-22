@@ -63,7 +63,8 @@ function nextCodeLine(f, a) {
 // ---- patterns -------------------------------------------------------------------------------
 
 const SKIP = {
-  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme)\s*\(|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(/,
+  // The second branch is an alias made of a skip ("const itX = it.skip"); a ternary there is only a conditional skip.
+  js: /\b(it|test|describe|context|suite|specify)\.(skip|todo|fixme)\s*\(|=\s*[^;]*\b(it|test|describe)\.skip\b(?!\s*\()|\bx(it|test|describe|context|specify)\s*\(|\b(it|test|describe)\.skipIf\s*\(\s*(true|1)\b|\bthis\.skip\s*\(|(?<![.\w$])pending\s*\(/,
   py: /@pytest\.mark\.(skip|xfail)\b|@pytest\.mark\.skipif\s*\(\s*(True|1)\b|@unittest\.(skip|expectedFailure)\b|@unittest\.skipIf\s*\(\s*(True|1)\b|@unittest\.skipUnless\s*\(\s*(False|0)\b|\bpytest\.(skip|xfail)\s*\(|\bself\.skipTest\s*\(|\braise\s+(unittest\.)?SkipTest\b/,
   jvm: /@(Disabled|Ignore|DisabledIf\w*|Ignored)\b|\bAssumptions\.assume\w*\s*\(\s*false|\bassumeTrue\s*\(\s*false|@Test\s*\(\s*enabled\s*=\s*false/,
   go: /\bt\.(Skip|SkipNow|Skipf)\s*\(/,
@@ -82,7 +83,13 @@ const FOCUS = {
 
 // Lines that open a test, for the rule that notices a test being unregistered. @Test and
 // @ParameterizedTest (and [Fact] and [Theory]) are interchangeable, so swapping them is fine.
-const TEST_HEADER = /^\s*(@(Test|ParameterizedTest|RepeatedTest|TestFactory)\b|#\[\s*(tokio::)?test\b|\[\s*(Fact|Theory|Test|TestMethod|TestCase|TestCaseSource)\b|(async\s+)?def\s+test_\w*\s*\(|func\s+Test[A-Z_]\w*\s*\(\s*\w+\s+\*testing\.T|(it|test|specify)(\.\w+)?\s*\(\s*['"`])/;
+const TEST_HEADER = /^\s*(@(Test|ParameterizedTest|RepeatedTest|TestFactory)\b|#\[\s*(tokio::)?test\b|\[\s*(Fact|Theory|Test|TestMethod|TestCase|TestCaseSource)\b|(async\s+)?def\s+test_\w*\s*\(|func\s+Test[A-Z_]\w*\s*\(\s*\w+\s+\*testing\.T|(it|test|specify)(\.\w+)?\s*\(\s*['"`]|(it|test|describe)(\.(only|skip|concurrent))?\.each\s*[(`])/;
+
+const SUITE_REG = /\b(loadTestsFromTestCase|loadTestsFromName|loadTestsFromModule|makeSuite|addTests?)\s*\(\s*(loader\.\w+\s*\(\s*)?([\w.]+)/;
+const CONDITIONAL_SKIP_ALIAS = /=[^;]*\?[^;]*\b(it|test|describe)\.skip\b(?!\s*\()/;
+
+// "const itPosix = cond ? it.skip : it" makes itPosix a test header of its own.
+const TEST_ALIAS = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;]*\b(?:it|test)\b(?:\.(?:skip|only|concurrent))?/;
 
 // A table or parameterize construct. A file that adds one has folded several asserts into a loop.
 const TABLE = /\bfor\s*\(|\bfor\s+[\w\[({]|\brange\b|\.(each|forEach)\b|@pytest\.mark\.parametrize|@ParameterizedTest|\[\s*(Theory|InlineData|TestCase|DataRow)\b|\bt\.Run\s*\(/;
@@ -295,7 +302,7 @@ export const RULES = [
       else if (!ctx.isTest(p)) continue;
       else if (lang === 'other') hit = Object.values(SKIP).some(r => r.test(a.text));
       else hit = SKIP[lang].test(a.text);
-      if (hit) add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a));
+      if (hit) add(p, a.line, null, a.text, undefined, skipIsHarmless(f, a) || (lang === 'js' && CONDITIONAL_SKIP_ALIAS.test(a.text)));
     }
   }),
 
@@ -459,7 +466,34 @@ export const RULES = [
     id: 'test-unregistered', tier: 'HARD', title: 'Test no longer registered',
     why: 'A test lost its annotation or its test name, so the runner no longer finds it and it silently stops running.',
   }, (ctx, add) => {
-    const header = (t) => !isCommentLine(t) && TEST_HEADER.test(t);
+    // Explicit suite registration (unittest's loadTestsFromTestCase and friends) is a header too.
+    const anyAdded = (re) => ctx.files.some(g => g.added.some(a => !isCommentLine(a.text) && re.test(a.text)));
+    const discovers = anyAdded(/\bdiscover\s*\(|\bunittest\.main\s*\(/);
+    const addsOtherReg = anyAdded(SUITE_REG);
+    for (const f of ctx.files) {
+      if (f.status === 'deleted' || !fileIsTest(ctx, f)) continue;
+      for (const r of f.removed) {
+        const m = !isCommentLine(r.text) && SUITE_REG.exec(r.text);
+        if (!m) continue;
+        const name = m[3];
+        const word = new RegExp(`(?<![\\w.])${name.replace(/[.$]/g, '\\$&')}\\b`);
+        if (anyAdded(word) || discovers) continue;
+        const classGone = ctx.files.some(g => g.status === 'deleted' && g.removed.some(x => new RegExp(`\\bclass\\s+${name.split('.').pop()}\\b`).test(x.text)));
+        if (classGone) continue;
+        add(pathOf(f), r.line, r.text, null, undefined, addsOtherReg);
+      }
+    }
+    const aliases = [];
+    for (const f of ctx.files) {
+      for (const a of f.added) {
+        const m = !isCommentLine(a.text) && TEST_ALIAS.exec(a.text);
+        if (m) aliases.push(m[1].replace(/\$/g, '\\$'));
+      }
+    }
+    const aliasCall = aliases.length
+      ? new RegExp(`^\\s*(${aliases.join('|')})(\\.\\w+)?\\s*\\(\\s*['"\`]`)
+      : null;
+    const header = (t) => !isCommentLine(t) && (TEST_HEADER.test(t) || (aliasCall?.test(t) ?? false));
     const per = [];
     let removedTotal = 0;
     let addedTotal = 0;
