@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>red-handed</title>
+<meta name="description" content="red-handed reads a code change and says whether an AI coding agent cheated to make the tests pass. 21 regex checks, no AI, no API key.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://dizzymii.github.io/red-handed/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="red-handed">
+<meta property="og:title" content="red-handed: All tests pass. Sure they do.">
+<meta property="og:description" content="Reads a code change and says whether an AI coding agent cheated to make the tests pass. 21 regex checks, no AI, no API key. Try it in the page.">
+<meta property="og:url" content="https://dizzymii.github.io/red-handed/">
+<meta property="og:image" content="https://dizzymii.github.io/red-handed/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The word CAUGHT on a red block, under the line All tests pass. Sure they do.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23cc1a0a'/%3E%3Cpath d='M4 8.5l2.7 2.7L12 5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<a class="skip" href="#playground">Skip to the playground</a>
+
+<header class="top wrap">
+  <a class="mark" href="#top" aria-label="red-handed, back to top"><span class="sq" aria-hidden="true"></span>red-handed</a>
+  <nav aria-label="Sections">
+    <a href="#playground">Playground</a>
+    <a class="wide" href="#run">Run it</a>
+    <a class="wide" href="#action">Action</a>
+    <a class="wide" href="#rules">Rules</a>
+    <a href="https://github.com/DizzyMii/red-handed">GitHub</a>
+    <a href="https://www.npmjs.com/package/red-handed">npm</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<section class="hero wrap" aria-labelledby="h">
+  <p class="eyebrow">A CLI for AI agent diffs</p>
+  <h1 id="h">All tests pass.<br><span class="red">Sure they do.</span></h1>
+  <div class="lede">
+    <p>red-handed reads a code change and tells you if an AI coding agent got the tests green by cheating. A test that got skipped. An expected value bent to match the bug.</p>
+    <p>It's fixed regex rules over the added and removed lines. There is no model in the loop and no API key.</p>
+  </div>
+  <div class="hero-cmd-wrap">
+    <div class="hero-cmd">
+      <code>npx red-handed demo</code>
+      <button class="copy" type="button" data-copy="npx red-handed demo">Copy</button>
+    </div>
+    <p class="try"><a href="#playground">Try it below</a></p>
+  </div>
+
+  <section class="exa" aria-labelledby="exa-h">
+    <div class="exa-head">
+      <h2 id="exa-h">Exhibit A</h2>
+      <span>agent/fix-discount</span>
+    </div>
+    <p class="exa-claim"><span class="k">agent:</span> <span id="exa-claim">Fixed the discount bug.</span> <span class="ok"><span aria-hidden="true">&#10003;</span> all tests pass</span></p>
+    <ol class="exa-list" id="exa-list" aria-label="What red-handed found in that diff"></ol>
+    <div class="exa-foot">
+      <span class="exa-slab" id="exa-slab" hidden><b id="exa-word"></b><i id="exa-sub"></i></span>
+      <button class="linkish" type="button" id="exa-open">Open it in the playground</button>
+    </div>
+  </section>
+</section>
+
+<section class="stats wrap" aria-label="Numbers">
+  <div class="stat-big"><span class="num">0</span><span class="cap">false positives on 16 agent PRs</span></div>
+  <div class="stat-text">
+    <p class="field-test">I ran it over 16 real pull requests opened by AI coding agents. Nothing it flagged turned out to be wrong. 16 is a small sample, so if it flags something it shouldn't in yours, send me the diff.</p>
+    <p class="stat-small"><span id="n-rules">21</span> checks, <span id="n-split">11 hard and 10 soft</span>. No dependencies, just Node 20 and git.</p>
+  </div>
+</section>
+<p class="statline wrap"><span id="n-rules-line">21</span> checks, and <b class="red">no false positives</b> across 16 agent PRs.</p>
+
+<section class="sec wrap" id="playground" aria-labelledby="pg-h">
+  <div class="sec-head">
+    <span class="idx">01</span>
+    <h2 id="pg-h">Playground</h2>
+    <p class="sec-note">This runs <code>src/</code> in your browser. A pretend agent was asked to fix a failing discount test. Pick one of the things it did. The other two tabs take a public pull request or your own diff.</p>
+  </div>
+
+  <div class="instrument">
+    <div class="pane in">
+      <div class="tabs" id="tabs-top" role="tablist" aria-label="What to scan">
+        <button role="tab" id="tab-cheats" aria-controls="panel-cheats" aria-selected="true" type="button">Cheats</button>
+        <button role="tab" id="tab-pr" aria-controls="panel-pr" aria-selected="false" tabindex="-1" type="button">Pull request</button>
+        <button role="tab" id="tab-paste" aria-controls="panel-paste" aria-selected="false" tabindex="-1" type="button">Paste a diff</button>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-cheats" aria-labelledby="tab-cheats">
+        <ol class="cheats" id="cheats"></ol>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-pr" aria-labelledby="tab-pr" hidden>
+        <form id="pr-form" class="field">
+          <label for="pr-url">Public GitHub pull request</label>
+          <div class="row">
+            <input id="pr-url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo/pull/12">
+            <button type="submit" class="go">Scan</button>
+          </div>
+          <p class="hint">Fetched from api.github.com, 60 an hour without a login.</p>
+          <p class="hint">Examples: <button type="button" class="linkish" id="pr-example-hit">an agent PR that deletes a failing test</button> (it gives a reason and a maintainer merged it, which is the point: someone looked), <button type="button" class="linkish" id="pr-example">a small one</button></p>
+          <p class="msg" id="pr-msg" role="status"></p>
+        </form>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-paste" aria-labelledby="tab-paste" hidden>
+        <form id="paste-form" class="field">
+          <label for="paste">A unified diff, the kind <code>git diff</code> prints</label>
+          <textarea id="paste" spellcheck="false" rows="14" placeholder="diff --git a/test/cart.test.js b/test/cart.test.js&#10;--- a/test/cart.test.js&#10;+++ b/test/cart.test.js&#10;@@ -1,3 +1,3 @@&#10;-test('works', () => {&#10;+test.skip('works', () => {"></textarea>
+          <div class="row end">
+            <span class="hint">Ctrl+Enter scans too</span>
+            <button type="submit" class="go">Scan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="pane out" id="out">
+      <div class="empty" id="empty">
+        <p class="empty-big">Nothing scanned yet.</p>
+        <p id="empty-hint">Pick a cheat. The last one is an honest fix.</p>
+      </div>
+      <div class="result" id="result" hidden>
+        <a class="again" href="#tabs-top" id="again">Try another &#8593;</a>
+        <p class="claim" id="claim" hidden><span class="k">agent:</span> <span id="claim-text"></span> <span class="ok"><span aria-hidden="true">&#10003;</span> all tests pass</span></p>
+        <div class="verdict" id="verdict">
+          <span class="v-sub" id="v-sub"></span>
+          <h3 class="v-word" id="v-word" tabindex="-1"></h3>
+          <p class="v-means" id="v-means"></p>
+          <span class="v-bar" id="v-bar" aria-hidden="true"></span>
+        </div>
+        <p class="v-meta" id="v-meta"></p>
+        <ol class="findings" id="findings"></ol>
+        <details class="diffbox" id="diffbox">
+          <summary id="diff-sum">The diff it scanned</summary>
+          <div class="dv" id="dv" tabindex="0" role="region" aria-label="The diff that was scanned"></div>
+        </details>
+        <p class="notes" id="notes"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec wrap" id="run" aria-labelledby="run-h">
+  <div class="sec-head">
+    <span class="idx">02</span>
+    <h2 id="run-h">Run it</h2>
+    <p class="sec-note">Exit code is 0 for CLEAN or SUSPICIOUS, 1 for CAUGHT, 2 if it couldn't run. <code>--strict</code> fails on SUSPICIOUS too, and <code>--json</code> is there if you want to do something else with it.</p>
+  </div>
+  <ul class="cmds">
+    <li><div class="cmd"><code>npx red-handed</code><button class="copy" type="button" data-copy="npx red-handed">Copy</button></div><p>Inside a repo. Compares your branch with main and includes uncommitted and untracked files.</p></li>
+    <li><div class="cmd"><code>npx red-handed https://github.com/owner/repo/pull/12</code><button class="copy" type="button" data-copy="npx red-handed https://github.com/owner/repo/pull/12">Copy</button></div><p>A public pull request, no clone. Set <code>GITHUB_TOKEN</code> for private repos or the rate limit.</p></li>
+    <li><div class="cmd"><code>npx red-handed demo</code><button class="copy" type="button" data-copy="npx red-handed demo">Copy</button></div><p>Builds a throwaway repo, cheats five ways and scans it. Same diff as "All five at once" above.</p></li>
+    <li><div class="cmd"><code>git diff main | npx red-handed -</code><button class="copy" type="button" data-copy="git diff main | npx red-handed -">Copy</button></div><p>Any diff on stdin, or pass a <code>.patch</code> file.</p></li>
+  </ul>
+</section>
+
+<section class="sec wrap" id="action" aria-labelledby="act-h">
+  <div class="sec-head">
+    <span class="idx">03</span>
+    <h2 id="act-h">GitHub Action</h2>
+    <p class="sec-note">It posts one comment on the pull request and edits it on every push. Pull requests from forks get a read-only token, so there the report only goes to the job summary.</p>
+  </div>
+  <div class="yaml">
+    <button class="copy" type="button" data-copy-from="yaml">Copy</button>
+<pre id="yaml" tabindex="0" aria-label="GitHub Action workflow"><code>name: red-handed
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dizzymii/red-handed@v0
+        with:
+          fail-on: caught</code></pre>
+  </div>
+</section>
+
+<section class="sec wrap" id="rules" aria-labelledby="rules-h">
+  <div class="sec-head">
+    <span class="idx">04</span>
+    <h2 id="rules-h"><span id="rules-count">21</span> rules</h2>
+    <p class="sec-note">Read from <code>src/rules.mjs</code>, the same file the playground runs. One HARD finding makes the verdict CAUGHT. SOFT findings have honest uses, so they only make it SUSPICIOUS.</p>
+  </div>
+  <ol class="rules" id="rule-list"></ol>
+</section>
+
+<section class="sec wrap" id="limits" aria-labelledby="lim-h">
+  <div class="sec-head">
+    <span class="idx">05</span>
+    <h2 id="lim-h">What it does not do</h2>
+  </div>
+  <div class="limits">
+    <p class="pull">Treat it as a smoke alarm. When it goes off, go read the lines it printed.</p>
+    <div class="limits-body">
+      <p>It doesn't run your tests, so it can't tell you whether they pass. The rules are regexes over added and removed lines, and a determined author can get around them: build the string <code>"te" + "st"</code> and test-detection never sees it, or move the cheat somewhere it doesn't look.</p>
+      <p>So a CLEAN means the usual tricks are absent and nothing more. Expect the odd false SOFT finding too. If you get a false HARD one, open an issue with the diff.</p>
+      <p>It doesn't send your code anywhere either, the only network call is to the GitHub API when you hand it a pull request.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot wrap">
+  <div class="sign"><p>I made this because I got tired of reading agent diffs where the green checkmark came from the test file.</p><p class="by">Kade, October 2026</p></div>
+  <p class="links"><a href="https://github.com/DizzyMii/red-handed">GitHub</a> <a href="https://www.npmjs.com/package/red-handed">npm</a> <a href="https://github.com/DizzyMii/red-handed/blob/main/LICENSE">MIT license</a></p>
+</footer>
+
+<p class="sr-only" id="sr" role="status" aria-live="polite"></p>
+</body>
+</html>
