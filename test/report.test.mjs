@@ -93,3 +93,9 @@ test('json round-trips the result', () => {
   assert.deepEqual(JSON.parse(json(r)), JSON.parse(JSON.stringify(r)));
   assert.equal(JSON.parse(json(r)).schema, 'red-handed/1');
 });
+
+test('terminal says file in the singular for one file', () => {
+  const text = terminal(clean(), {});
+  assert.match(text, /1 file, 0 test files, assertions \+0 -0/);
+  assert.match(terminal(caught(), {}), /1 file, 1 test file, assertions/);
+});

@@ -20,7 +20,7 @@ export function terminal(result, { color = false, max = 30, dumb = false } = {})
   const out = [];
 
   out.push(`${c('1', 'red-handed')}  ${source.label ?? ''}`);
-  out.push(`            ${stats.files} files, ${stats.testFiles} test files, assertions +${stats.assertionsAdded} -${stats.assertionsRemoved}`);
+  out.push(`            ${stats.files} ${stats.files === 1 ? 'file' : 'files'}, ${stats.testFiles} test ${stats.testFiles === 1 ? 'file' : 'files'}, assertions +${stats.assertionsAdded} -${stats.assertionsRemoved}`);
   out.push('');
 
   const counts = verdict === 'CLEAN' ? '' : `   ${hard} hard, ${soft} soft`;
@@ -51,7 +51,7 @@ export function terminal(result, { color = false, max = 30, dumb = false } = {})
     out.push('  Nothing conclusive. Worth a look.');
     out.push('');
   }
-  return out.join('\n');
+  return out.join('\n') + '\n';
 }
 
 const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
@@ -110,4 +110,11 @@ export function rulesList(rules, { color = false } = {}) {
     const tier = paint(color, r.tier === 'HARD' ? '31' : '33', r.tier.padEnd(6));
     return `${tier}${r.id.padEnd(width)}${r.why}`;
   }).join('\n') + '\n';
+}
+
+export function wantColor(io, noColor = false) {
+  if (noColor) return false;
+  const force = io.env?.FORCE_COLOR;
+  if (force && force !== '0') return true;
+  return Boolean(io.stdout.isTTY) && !io.env?.NO_COLOR;
 }
