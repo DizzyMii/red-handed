@@ -77,7 +77,10 @@ export const moveKey = (t, opts) => normalised(dropMessage(t, opts));
 const OVERLOADS = new Set(['jvm', 'cs']);
 const NOT_A_NAME = new Set(['if', 'for', 'while', 'switch', 'return', 'new', 'catch', 'else', 'do', 'try', 'synchronized', 'function', 'throw', 'typeof', 'await', 'yield', 'super', 'this']);
 const JVM_TYPE = /(?<![.\w$])(?:class|interface|enum|record|object)\s+([A-Za-z_$][\w$]*)/;
-const JVM_METHOD = /^\s*(?:@\w+(?:\([^)]*\))?\s+)*((?:[\w$]+\s+)*(?:<[^>]+>\s+)?[\w$.<>\[\],? ]+?)\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*(?:throws\s[^{]*)?\{?\s*$/;
+// Modifiers, generics and the return type all fall in the first group.
+const JVM_METHOD = /^\s*(?:@\w+(?:\([^)]*\))?\s+)*([\w$.<>\[\],? ]+?)\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*(?:throws\s[^{]*)?\{?\s*$/;
+// Cheap test first: the full pattern backtracks on long lines that cannot be a method header.
+const JVM_METHOD_TAIL = /\)\s*(?:throws\s[^{]*)?\{?\s*$/;
 const KOTLIN_FUN = /\bfun\s+(?:<[^>]+>\s*)?(?:[\w$]+\.)?([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
 const JVM_FIELD = /\b(?:final|const|readonly)\s+[\w$<>\[\],.? ]+?\s+([A-Za-z_$][\w$]*)\s*=/;
 const KOTLIN_VAL = /^\s*(?:(?:private|public|internal|protected|const)\s+)*(?:val|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/;
@@ -107,7 +110,7 @@ export function declarationsOn(text, lang) {
     if (t) out.push({ name: t[1], kind: 'type', arity: null });
     const k = KOTLIN_FUN.exec(text);
     if (k) out.push({ name: k[1], kind: 'fn', arity: countArgs(stripGenerics(k[2])) });
-    const m = !t && !k && JVM_METHOD.exec(text);
+    const m = !t && !k && JVM_METHOD_TAIL.test(text) && JVM_METHOD.exec(text);
     if (m && !NOT_A_NAME.has(m[2]) && !/(^|\s)(new|return|throw|else)$/.test(m[1].trim()) && !/[=.]$/.test(m[1].trim())) {
       out.push({ name: m[2], kind: 'fn', arity: countArgs(stripGenerics(m[3])) });
     }
