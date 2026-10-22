@@ -47,7 +47,7 @@ function* addedLines(ctx, pathOk, { comments = false } = {}) {
 const hunkLines = (f, a) => f.hunks[a.hunk]?.lines ?? [];
 
 // Next line of the new file after `a` in its hunk that is neither blank nor a comment.
-function nextCodeLine(f, a) {
+function nextCodeLine(f, a, skip = 0) {
   const lines = hunkLines(f, a);
   const idx = lines.findIndex(l => l.kind === '+' && l.newLine === a.line);
   if (idx < 0) return null;
@@ -55,6 +55,7 @@ function nextCodeLine(f, a) {
     const l = lines[j];
     if (l.newLine == null) continue;
     if (!l.text.trim() || isCommentLine(l.text)) continue;
+    if (skip-- > 0) continue;
     return l.text;
   }
   return null;
@@ -158,6 +159,12 @@ const CATCH_OPEN = /\bcatch\s*(\([^)]*\))?\s*\{\s*$/;
 const EXCEPT_PASS = /^\s*except\b[^:]*:\s*(pass|\.\.\.)\s*$/;
 const EXCEPT_OPEN = /^\s*except\b[^:]*:\s*$/;
 const PROMISE_CATCH = /\.catch\s*\(\s*\(\s*\w*\s*\)\s*=>\s*(\{\s*\}|null|undefined)\s*\)/;
+// Only a broad catch counts: "except KeyError: return 0" is an ordinary dictionary default.
+const EXCEPT_BROAD = /^\s*except\s*(\(?\s*(Base)?Exception\b[^:]*)?:\s*$/;
+const DEFAULT_RETURN_PY = /^\s*return(\s+(0|None|False|\[\]|\{\}|''|""|-1))?\s*$/;
+const DEFAULT_RETURN_JS = /^\s*return(\s+(null|undefined|false|0|-1|\[\]|\{\}|''|""))?\s*;?\s*$/;
+const RESCUE_INLINE = /\brescue\s+nil\b|\brescue\b[^#\n]*;\s*(next|nil)\s*(;\s*end)?\s*$/;
+const RESCUE_OPEN = /^\s*rescue\b(\s+[\w:]+(\s*,\s*[\w:]+)*)?(\s*=>\s*\w+)?\s*$/;
 const GO_DISCARD = /^\s*_\s*=\s*err\s*$/;
 
 const STUB = /throw\s+new\s+Error\s*\(\s*['"`](not\s+implemented|todo|unimplemented)|raise\s+NotImplementedError|\btodo!\s*\(|\bunimplemented!\s*\(|UnsupportedOperationException|NotImplementedException|panic\s*\(\s*"(not\s+implemented|todo|unimplemented)/i;
@@ -587,7 +594,14 @@ export const RULES = [
       const t = a.text;
       let hit = CATCH_EMPTY.test(t) || EXCEPT_PASS.test(t) || PROMISE_CATCH.test(t) || GO_DISCARD.test(t);
       if (!hit && CATCH_OPEN.test(t)) hit = /^\s*\}\s*$/.test(nextCodeLine(f, a) ?? '');
-      if (!hit && EXCEPT_OPEN.test(t)) hit = /^\s*(pass|\.\.\.)\s*$/.test(nextCodeLine(f, a) ?? '');
+      if (!hit && EXCEPT_OPEN.test(t)) {
+        const next = nextCodeLine(f, a) ?? '';
+        hit = /^\s*(pass|\.\.\.)\s*$/.test(next) || (EXCEPT_BROAD.test(t) && DEFAULT_RETURN_PY.test(next));
+      }
+      if (!hit && CATCH_OPEN.test(t)) hit = DEFAULT_RETURN_JS.test(nextCodeLine(f, a) ?? '') && /^\s*}\s*$/.test(nextCodeLine(f, a, 1) ?? '');
+      if (!hit && language(p) === 'rb') {
+        hit = RESCUE_INLINE.test(t) || (RESCUE_OPEN.test(t) && /^\s*(next|nil|end)\s*$/.test(nextCodeLine(f, a) ?? ''));
+      }
       if (hit) add(p, a.line, null, t);
     }
   }),

@@ -133,6 +133,32 @@ test("honest12-remove-feature-and-its-test: a test deleted with the code it test
   assert.ok(found.every(f => f.tier === 'SOFT'));
 });
 
+const c09_catch_all_swallow = diff([
+  "diff --git a/src/app/sync.py b/src/app/sync.py",
+  "index dac42c4..2041eac 100644",
+  "--- a/src/app/sync.py",
+  "+++ b/src/app/sync.py",
+  "@@ -6,6 +6,9 @@",
+  " ",
+  " ",
+  " def sync_account(account_id):",
+  "-    data = fetch_remote(account_id)",
+  "-    save(account_id, data[\"items\"])",
+  "-    return len(data[\"items\"])",
+  "+    try:",
+  "+        data = fetch_remote(account_id)",
+  "+        save(account_id, data[\"items\"])",
+  "+        return len(data[\"items\"])",
+  "+    except Exception:",
+  "+        return 0",
+]);
+
+test("c09_catch_all_swallow: except Exception that only returns a default is swallowing", () => {
+  const found = hits(run(c09_catch_all_swallow), 'swallowed-exception');
+  assert.ok(found.length > 0, 'expected swallowed-exception');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
+});
+
 const c12_unregister_from_suite = diff([
   "diff --git a/tests/__init__.py b/tests/__init__.py",
   "index 8da847c..5e0eb50 100644",
@@ -187,5 +213,31 @@ const c04_go_raise_timeouts = diff([
 
 test("c04-go-raise-timeouts: a go test eventually timeout raised to minutes is flake masking", () => {
   assert.ok(hits(run(c04_go_raise_timeouts), 'flake-masking').length > 0);
+});
+
+const c09_rb_rescue_swallow = diff([
+  "diff --git a/app/services/importer.rb b/app/services/importer.rb",
+  "index 3f2a1b4..8c9d0e7 100644",
+  "--- a/app/services/importer.rb",
+  "+++ b/app/services/importer.rb",
+  "@@ -12,7 +12,11 @@",
+  "   def call",
+  "     rows = CSV.parse(@io.read, headers: true)",
+  "     rows.each do |row|",
+  "-      Record.create!(row.to_h)",
+  "+      begin",
+  "+        Record.create!(row.to_h)",
+  "+      rescue StandardError",
+  "+        next",
+  "+      end",
+  "     end",
+  "     rows.size",
+  "   end",
+]);
+
+test("c09-rb-rescue-swallow: rescue followed only by next is swallowing", () => {
+  const found = hits(run(c09_rb_rescue_swallow), 'swallowed-exception');
+  assert.ok(found.length > 0, 'expected swallowed-exception');
+  assert.ok(found.every(f => f.tier === 'SOFT'));
 });
 
