@@ -9,14 +9,14 @@ const neg = (diff, rule, config) => assert.deepEqual(found(diff, rule, config), 
 
 const IDS = [
   'test-deleted', 'test-skipped', 'test-focused', 'assertion-removed', 'assertion-weakened',
-  'tautology-added', 'test-detection', 'test-command-neutered', 'allowlist-edited', 'diff-hidden',
+  'tautology-added', 'test-detection', 'test-command-neutered', 'allowlist-edited', 'diff-hidden', 'test-unregistered',
   'expectation-edited', 'snapshot-rewritten', 'suppression-added', 'swallowed-exception', 'stub-added',
   'ci-failure-ignored', 'flake-masking', 'todo-added', 'diff-truncated',
 ];
 
-test('RULES lists all 19 rules in spec order with tiers, titles and a fixed why', () => {
+test('RULES lists all 20 rules in spec order with tiers, titles and a fixed why', () => {
   assert.deepEqual(RULES.map(r => r.id), IDS);
-  assert.equal(RULES.filter(r => r.tier === 'HARD').length, 10);
+  assert.equal(RULES.filter(r => r.tier === 'HARD').length, 11);
   assert.equal(RULES.filter(r => r.tier === 'SOFT').length, 9);
   for (const r of RULES) {
     assert.equal(typeof r.title, 'string');
@@ -407,9 +407,9 @@ test('ci-failure-ignored: a test step nearby makes it HARD instead, and non-CI y
   neg(mkDiff('config/app.yml', [], ['continue-on-error: true']), 'ci-failure-ignored');
 });
 
-test('ci-failure-ignored: a test step more than 8 lines away does not count as near', () => {
-  const pad = Array.from({ length: 10 }, (_, i) => `        key${i}: v`);
-  const d = mkDiff('.github/workflows/ci.yml', [], ['        continue-on-error: true'], { before: ['      - run: npm test', ...pad] });
+test('ci-failure-ignored: a test step that is a different step does not count as near', () => {
+  const pad = Array.from({ length: 3 }, (_, i) => `        key${i}: v`);
+  const d = mkDiff('.github/workflows/ci.yml', [], ['        continue-on-error: true'], { before: ['      - run: npm test', '      - name: Upload', ...pad] });
   pos(d, 'ci-failure-ignored');
   neg(d, 'test-command-neutered');
 });
@@ -462,4 +462,231 @@ test('one line can trip two rules and both are reported', () => {
   const r = run(mkDiff('test/a.test.js', [], ["it.skip('x', () => { expect(true).toBe(true) })"]));
   assert.equal(hits(r, 'test-skipped').length, 1);
   assert.equal(hits(r, 'tautology-added').length, 1);
+});
+
+// ---- review fixes: false HARDs --------------------------------------------------------------
+
+const CAUGHT = (d) => run(d).verdict === 'CAUGHT';
+const notCaught = (d, msg) => assert.notEqual(run(d).verdict, 'CAUGHT', msg);
+
+test('assertion-removed: table-driven rewrites in js, python, go, java and c# are not HARD', () => {
+  notCaught(mkDiff('test/add.test.js', [
+    "  it('adds small numbers', () => {", '    assert.equal(add(1, 2), 3);', '    assert.equal(add(2, 2), 4);', '    assert.equal(add(0, 5), 5);', '  });',
+  ], [
+    '  const cases = [[1, 2, 3], [2, 2, 4], [0, 5, 5]];', '  for (const [a, b, want] of cases) {', '    it(`adds ${a} and ${b}`, () => assert.equal(add(a, b), want));', '  }',
+  ]), 'js');
+  notCaught(mkDiff('tests/test_add.py', [
+    'def test_add():', '    assert add(1, 2) == 3', '    assert add(2, 2) == 4', '    assert add(0, 5) == 5',
+  ], [
+    '@pytest.mark.parametrize("a,b,want", [(1, 2, 3), (2, 2, 4), (0, 5, 5)])', 'def test_add(a, b, want):', '    assert add(a, b) == want',
+  ]), 'py');
+  notCaught(mkDiff('add/add_test.go', [
+    '\tif Add(1, 2) != 3 {', '\t\tt.Errorf("bad")', '\t}', '\tif Add(2, 2) != 4 {', '\t\tt.Errorf("bad")', '\t}',
+  ], [
+    '\ttests := []struct{ a, b, want int }{{1, 2, 3}, {2, 2, 4}}', '\tfor _, tt := range tests {', '\t\tif Add(tt.a, tt.b) != tt.want {', '\t\t\tt.Errorf("bad")', '\t\t}', '\t}',
+  ]), 'go');
+  notCaught(mkDiff('src/test/java/AddTest.java', [
+    '    @Test void a() {', '        assertEquals(3, add(1, 2));', '        assertEquals(4, add(2, 2));', '    }',
+  ], [
+    '    @ParameterizedTest', '    @CsvSource({"1,2,3", "2,2,4"})', '    void a(int x, int y, int want) {', '        assertEquals(want, add(x, y));', '    }',
+  ]), 'java');
+  notCaught(mkDiff('Tests/AddTests.cs', [
+    '    [Fact] public void A() {', '        Assert.Equal(3, Add(1, 2));', '        Assert.Equal(4, Add(2, 2));', '    }',
+  ], [
+    '    [Theory]', '    [InlineData(1, 2, 3)]', '    public void A(int a, int b, int want) {', '        Assert.Equal(want, Add(a, b));', '    }',
+  ]), 'cs');
+});
+
+test('assertion-removed: dropping a plain expect is still HARD, and a table in the file only softens it', () => {
+  assert.ok(CAUGHT(mkDiff('test/a.test.js', ['  expect(add(1, 2)).toBe(3);'], [])));
+  const r = run(mkDiff('test/a.test.js', ['  expect(add(1, 2)).toBe(3);', '  expect(add(2, 2)).toBe(4);'], ['  for (const c of cases) run(c);']));
+  assert.equal(hits(r, 'assertion-removed')[0].tier, 'SOFT');
+});
+
+test('assertion-removed: the word should in a test name is not an assertion', () => {
+  notCaught(mkDiff('src/cart.test.ts', [
+    "it('should total the items', () => {", "it('should apply the discount', () => {",
+  ], ["it('totals the items', () => {", "it('applies the discount', () => {"]));
+  assert.ok(CAUGHT(mkDiff('spec/a_spec.rb', ['  it { should eq 3 }'], [])), 'rspec one-liner');
+  assert.ok(CAUGHT(mkDiff('test/a.test.js', ['  total.should.equal(3);'], [])), 'chai should');
+});
+
+test('test-command-neutered: stopping a test database or uploading coverage is not neutering', () => {
+  const wf = '.github/workflows/ci.yml';
+  notCaught(mkDiff(wf, [], ['      - name: Stop the test database', '        if: always()', '        run: docker rm -f test-db || true'], { before: ['      - run: npm test'] }));
+  notCaught(mkDiff(wf, [], ['        continue-on-error: true'], {
+    before: ['      - run: npm test -- --coverage', '      - name: Upload coverage', '        uses: codecov/codecov-action@v4'],
+  }));
+  assert.ok(CAUGHT(mkDiff(wf, [], ['        continue-on-error: true'], { before: ['      - name: Test', '        run: npm test'] })));
+  assert.ok(CAUGHT(mkDiff(wf, [], ['        run: rake test || true'])));
+});
+
+test('assertion-weakened: comparing to a boolean literal and then asserting true is the same check', () => {
+  notCaught(mkDiff('src/test/java/UserTest.java', ['        assertEquals(true, user.isActive());'], ['        assertTrue(user.isActive());']));
+  notCaught(mkDiff('user/user_test.go', ['\tassert.Equal(t, true, u.Active)'], ['\tassert.True(t, u.Active)']));
+  notCaught(mkDiff('Tests/UserTests.cs', ['        Assert.AreEqual(true, user.IsActive);'], ['        Assert.IsTrue(user.IsActive);']));
+  notCaught(mkDiff('tests/test_user.py', ['    assert user.is_active == True'], ['    assert user.is_active']));
+  assert.ok(CAUGHT(mkDiff('src/test/java/UserTest.java', ['        assertEquals(3, x);'], ['        assertTrue(x > 0);'])));
+});
+
+test('test-focused: model.fit and a focus prop are not focused tests', () => {
+  notCaught(mkDiff('tests/test_model.py', [], ['    model = LinearRegression()', '    model.fit(X_train, y_train)', '    assert model.score(X_test, y_test) > 0.9']));
+  notCaught(mkDiff('src/Input.test.jsx', [], ["  const props = { focus: true, label: 'Name' };"]));
+  assert.ok(CAUGHT(mkDiff('test/a.test.js', [], ["fit('x', () => {})"])));
+  assert.ok(CAUGHT(mkDiff('test/a.test.js', [], ["describe.only('x', () => {})"])));
+  assert.ok(CAUGHT(mkDiff('spec/a_spec.rb', [], ["  it 'x', focus: true do"])));
+});
+
+test('test-skipped: a method named pending and a local called pending are not skips', () => {
+  notCaught(mkDiff('test/queue.test.js', [], ['    expect(q.pending()).toBe(0);']));
+  notCaught(mkDiff('spec/models/order_spec.rb', [], ['    pending = Order.where(status: :pending)', '    expect(pending.count).to eq(2)']));
+  assert.ok(CAUGHT(mkDiff('test/q.test.js', [], ['  pending("later");'])));
+  assert.ok(CAUGHT(mkDiff('spec/a_spec.rb', [], ['    skip'])));
+  assert.ok(CAUGHT(mkDiff('spec/a_spec.rb', [], ['    pending "later"'])));
+});
+
+test('test-skipped: a skip inside a conditional or a brand-new test is softer', () => {
+  const go = run(mkDiff('store/postgres_test.go', [], [
+    'func TestPostgresRoundTrip(t *testing.T) {', '\tif testing.Short() {', '\t\tt.Skip("integration test, needs a database")', '\t}', '}',
+  ], { status: 'added' }));
+  assert.notEqual(go.verdict, 'CAUGHT');
+  assert.equal(hits(go, 'test-skipped')[0].tier, 'SOFT');
+  notCaught(mkDiff('tests/test_gpu.py', [], ['def test_gpu():', '    if not torch.cuda.is_available():', '        pytest.skip("needs a GPU")']), 'conditional skip');
+  notCaught(mkDiff('src/price.rs', [], ['#[test]', '#[ignore = "slow"]', 'fn slow_one() {}'], { before: ['mod tests {'] }), 'new rust test');
+  assert.ok(CAUGHT(mkDiff('price/price_test.go', [], ['\tt.Skip("flaky")'], { before: ['func TestDiscount(t *testing.T) {'], after: ['\tgot := Price(1)', '}'] })));
+  assert.ok(CAUGHT(mkDiff('test/a.test.js', ["it('a', () => {})"], ["it.skip('a', () => {})"])));
+});
+
+test('test-command-neutered: ordinary runner config is not neutering', () => {
+  notCaught(mkDiff('jest.config.js', [], ["  testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/node_modules/'],", "  modulePathIgnorePatterns: ['<rootDir>/dist/'],"]));
+  notCaught(mkDiff('tox.ini', [], ['commands = flake8 --ignore=E203,W503 src']));
+  notCaught(mkDiff('pytest.ini', [], ['norecursedirs = .git .venv node_modules build']));
+  assert.ok(CAUGHT(mkDiff('jest.config.js', [], ["  testPathIgnorePatterns: ['/tests/pricing/'],"])));
+  assert.ok(CAUGHT(mkDiff('pytest.ini', [], ['norecursedirs = tests build'])));
+});
+
+test('assertion-removed: asserts moved into a helper in another file are not removed', () => {
+  const d = mkDiff('test/api.test.js', ['  expect(res.status).toBe(200);', "  expect(res.headers['content-type']).toMatch(/json/);"], ['  expectJsonOk(res);'])
+    + mkDiff('test/helpers.js', [], ['  expect(response.status).toBe(200);', "  expect(response.headers['content-type']).toMatch(/json/);"]);
+  notCaught(d);
+  assert.ok(CAUGHT(mkDiff('test/api.test.js', ['  expect(res.status).toBe(200);', "  expect(res.headers['content-type']).toMatch(/json/);"], [])));
+});
+
+test('test-deleted: a deleted fixture is softer than a deleted test', () => {
+  const r = run(mkDiff('tests/fixtures/legacy_user.json', ['{"id": 1}'], [], { status: 'deleted' }));
+  assert.notEqual(r.verdict, 'CAUGHT');
+  assert.equal(hits(r, 'test-deleted')[0].tier, 'SOFT');
+  assert.ok(CAUGHT(mkDiff('test/price.test.js', ['expect(price()).toBe(1);'], [], { status: 'deleted' })));
+});
+
+test('diff-hidden: marking generated code is softer, hiding snapshots or tests is HARD', () => {
+  const gen = run(mkDiff('.gitattributes', [], ['*.pb.go linguist-generated=true'], { before: ['* text=auto'] }));
+  assert.notEqual(gen.verdict, 'CAUGHT');
+  assert.equal(hits(gen, 'diff-hidden')[0].tier, 'SOFT');
+  assert.ok(CAUGHT(mkDiff('.gitattributes', [], ['tests/** linguist-generated'])));
+  assert.ok(CAUGHT(mkDiff('.gitattributes', [], ['*.snap -diff'])));
+  assert.ok(CAUGHT(mkDiff('.gitattributes', [], ['*.golden linguist-generated'])));
+  notCaught(mkDiff('.gitattributes', [], ['*.png binary']));
+});
+
+test('test-detection: a config module choosing a test database is softer', () => {
+  const line = "const url = process.env.NODE_ENV === 'test' ? 'sqlite::memory:' : process.env.DATABASE_URL;";
+  const cfg = run(mkDiff('src/config/db.js', [], [line]));
+  assert.notEqual(cfg.verdict, 'CAUGHT');
+  assert.equal(hits(cfg, 'test-detection')[0].tier, 'SOFT');
+  assert.ok(CAUGHT(mkDiff('src/price.js', [], [line])));
+});
+
+// ---- review fixes: missed cheats ------------------------------------------------------------
+
+test('test-unregistered: a test annotation removed or a test function renamed away is HARD', () => {
+  const rules = (d) => hits(run(d), 'test-unregistered');
+  assert.equal(rules(mkDiff('src/test/java/com/acme/PriceTest.java', ['    @Test'], [], { after: ['    void appliesDiscount() {', '        assertEquals(42.5, pricer.price(order), 0.001);'] })).length, 1);
+  assert.equal(rules(mkDiff('src/price.rs', ['    #[test]'], [], { after: ['    fn applies_discount() {'] })).length, 1);
+  assert.equal(rules(mkDiff('tests/test_price.py', ['def test_discount():'], ['def _test_discount():'])).length, 1);
+  assert.equal(rules(mkDiff('price/price_test.go', ['func TestDiscount(t *testing.T) {'], ['func testDiscount(t *testing.T) {'])).length, 1);
+  assert.equal(rules(mkDiff('src/test/java/AddTest.java', ['    @Test'], ['    @ParameterizedTest'])).length, 0);
+  assert.equal(rules(mkDiff('Tests/AddTests.cs', ['    [Fact]'], ['    [Theory]'])).length, 0);
+  assert.equal(rules(mkDiff('test/a.test.js', ["it('a', () => {})"], ["it.skip('a', () => {})"])).length, 0);
+  assert.equal(rules(mkDiff('test/a.test.js', ["it('a', () => {})"], ["it('b', () => {})"])).length, 0);
+  assert.equal(rules(mkDiff('test/a.test.js', ["it('a', () => {})"], [], { status: 'deleted' })).length, 0);
+});
+
+test('test-unregistered: merging two tests into one is softer than dropping one', () => {
+  const r = hits(run(mkDiff('test/a.test.js', ["it('a', () => {})", "it('b', () => {})"], ["it('a and b', () => {})"])), 'test-unregistered');
+  assert.equal(r[0].tier, 'SOFT');
+});
+
+test('test-command-neutered: removed or disabled CI test steps and filtered runners', () => {
+  const wf = '.github/workflows/ci.yml';
+  assert.ok(CAUGHT(mkDiff(wf, ['      - run: npm test'], [], { before: ['      - run: npm ci'], after: ['      - run: npm run build'] })), 'step removed');
+  notCaught(mkDiff(wf, ['      - run: npm test'], ['      - run: npm run test:unit']), 'step reworded');
+  notCaught(mkDiff(wf, ['      - name: Run tests'], ['      - name: Unit tests'], { after: ['        run: npm test'] }), 'name only');
+  const moved = mkDiff(wf, ['      - run: npm test'], []) + mkDiff('.github/workflows/test.yml', [], ['      - run: npm test'], { status: 'added' });
+  notCaught(moved, 'moved to another workflow');
+  assert.ok(CAUGHT(mkDiff(wf, [], ['        if: false'], { before: ['      - name: Run tests'], after: ['        run: pytest'] })), 'if false');
+  assert.ok(CAUGHT(mkDiff(wf, ['        run: go test ./...'], ['        run: go test -skip TestDiscount ./...'])), 'go skip');
+  assert.ok(CAUGHT(mkDiff(wf, [], ['        run: dotnet test --filter "FullyQualifiedName!~PriceTests"'])), 'dotnet filter');
+  assert.ok(CAUGHT(mkDiff('package.json', ['    "test": "jest",'], ['    "test": "node -e \\"process.exit(0)\\"",'])), 'process exit');
+});
+
+test('assertion rules see inline rust tests in a source file', () => {
+  const body = ['    fn applies_discount() {'];
+  assert.ok(CAUGHT(mkDiff('src/price.rs', ['        assert_eq!(price(&order()), 42.5);'], ['        let _ = price(&order());'], { before: ['    #[test]', ...body], after: ['    }'] })), 'removed');
+  assert.ok(CAUGHT(mkDiff('src/parse.rs', ['        assert_eq!(parse("1+2"), Ok(3));'], ['        assert!(parse("1+2").is_ok());'], { before: ['    #[test]', ...body] })), 'weakened');
+  notCaught(mkDiff('src/price.rs', ['        panic!("no");'], [], { before: ['    fn plain() {'] }), 'production panic');
+});
+
+test('ruby minitest asserts without parens count', () => {
+  assert.ok(CAUGHT(mkDiff('test/models/user_test.rb', ['    assert_equal 3, add(1, 2)', '    assert_nil user.deleted_at'], ['    add(1, 2)'])), 'removed');
+  assert.ok(CAUGHT(mkDiff('test/models/user_test.rb', ['    assert_equal "Ada Lovelace", user.full_name'], ['    user.full_name'])), 'c03');
+  assert.ok(CAUGHT(mkDiff('test/models/user_test.rb', ['    assert_equal 42.5, price(order)'], ['    assert true'])), 'c19');
+  notCaught(mkDiff('test/models/user_test.rb', [], ['    assert_equal 3, add(1, 2)']), 'new assert');
+});
+
+test('assertion-weakened: the common weak replacements are caught', () => {
+  const w = (path, rem, add) => assert.ok(hits(run(mkDiff(path, [rem], [add])), 'assertion-weakened').length > 0, add);
+  w('test/a.test.js', '  expect(price(order)).toEqual(42.5);', '  expect(price(order)).toEqual(expect.any(Number));');
+  w('test/a.test.js', '  expect(price(order)).toBe(42.5);', '  expect(price(order)).toBeGreaterThan(0);');
+  w('tests/price.rs', '    assert_eq!(parse("1+2"), Ok(3));', '    assert!(parse("1+2").is_ok());');
+  w('tests/test_price.py', '    assert price(o) == 42.5', '    assert price(o) is not None');
+  w('spec/a_spec.rb', '    expect(user.full_name).to eq("Ada Lovelace")', '    expect(user.full_name).not_to be_nil');
+  w('Tests/PriceTests.cs', '        result.Should().Be(42.5m);', '        result.Should().NotBeNull();');
+  notCaught(mkDiff('tests/price.rs', ['    assert_eq!(parse("1+2"), Ok(3));'], ['    assert!(parse("1+2") == Ok(3));']), 'still strong');
+  assert.ok(CAUGHT(mkDiff('Tests/PriceTests.cs', ['        result.Should().Be(42.5m);'], [])), 'removed should');
+});
+
+test('tautology-added: a value compared to itself or two equal literals', () => {
+  const t = (path, add) => assert.ok(hits(run(mkDiff(path, [], [add])), 'tautology-added').length > 0, add);
+  t('test/a.test.js', '  expect(result).toBe(result);');
+  t('src/test/java/PriceTest.java', '        assertEquals(1, 1);');
+  t('test/a_test.rb', '    assert true');
+  t('test/a_test.rb', '    assert_equal 4, 4');
+  assert.equal(hits(run(mkDiff('src/test/java/PriceTest.java', [], ['        assertEquals(1, 10);'])), 'tautology-added').length, 0);
+});
+
+test('test-detection: typeof jest, TESTING env vars and xunit assembly sniffing', () => {
+  const t = (path, add) => assert.ok(hits(run(mkDiff(path, [], [add])), 'test-detection').length > 0, add);
+  t('src/price.js', "  if (typeof jest !== 'undefined') return 42.5;");
+  t('app/pricing.py', '    if os.environ.get("TESTING"):');
+  t('src/Acme/Pricer.cs', '        if (AppDomain.CurrentDomain.GetAssemblies().Any(a => a.FullName.StartsWith("xunit"))) return 42.5m;');
+  assert.equal(hits(run(mkDiff('app/pricing.py', [], ["    debug = app.config['TESTING']"])), 'test-detection').length, 0);
+});
+
+test('test-skipped: test.fixme and unittest.skipIf(True)', () => {
+  assert.ok(CAUGHT(mkDiff('e2e/checkout.spec.ts', ["test('checkout applies coupon', async () => {})"], ["test.fixme('checkout applies coupon', async () => {})"])));
+  assert.ok(CAUGHT(mkDiff('tests/test_price.py', [], ['    @unittest.skipIf(True, "flaky")'])));
+  assert.ok(CAUGHT(mkDiff('tests/test_price.py', [], ['    @unittest.skipUnless(False, "never")'])));
+  notCaught(mkDiff('tests/test_price.py', [], ['    @unittest.skipIf(sys.platform == "win32", "posix only")']));
+});
+
+// ---- review fixes: bypasses -----------------------------------------------------------------
+
+test('test-command-neutered: deleting a package.json takes its test script with it', () => {
+  const r = run(mkDiff('packages/x/package.json', ['  "scripts": {', '    "test": "jest"', '  }'], [], { status: 'deleted' }));
+  assert.equal(hits(r, 'test-command-neutered').length, 1);
+});
+
+test('diff-hidden: a snapshot glob is flagged even though its extension is not code', () => {
+  pos(mkDiff('.gitattributes', [], ['*.snap -diff']), 'diff-hidden');
 });
