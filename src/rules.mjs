@@ -767,7 +767,9 @@ function coverageChanges(ctx) {
 const SNAPSHOT_GARBAGE = /\bNaN\b|\[object Object\]|Invalid Date/;
 const INLINE_EXPECTED = /toMatchInlineSnapshot|\.(?:toBe|toEqual|toStrictEqual)\s*\(/;
 const QUOTED_GARBAGE = /(['"`])[^'"`]*(?:\bNaN\b|\[object Object\]|Invalid Date)[^'"`]*\1/;
-const SUPPRESS_ASSERTION = /\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
+const CYPRESS_FAIL_SWALLOW = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:\([^)]*\)|\w+)\s*=>\s*(?:false|\{\s*(?:return\s+false\s*;?\s*)?\})\s*\)/;
+const CYPRESS_FAIL_OPEN = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:\([^)]*\)|\w+)\s*=>\s*\{\s*$/;
+const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
 // ---- the rules, in spec order ---------------------------------------------------------------
 
@@ -1200,6 +1202,16 @@ export const RULES = [
     id: 'assertion-swallowed', tier: 'HARD', title: 'Assertion failure caught',
     why: 'A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it.',
   }, (ctx, add) => {
+    // cy.on('fail', () => false) hands every failure back as a pass. Only Cypress code calls on('fail'),
+    // and support files are not test paths, so every js file is read. uncaught:exception is not touched.
+    for (const { f, a, p } of addedLines(ctx, (p) => language(p) === 'js')) {
+      if (CYPRESS_FAIL_SWALLOW.test(a.text)) { add(p, a.line, null, a.text); continue; }
+      if (!CYPRESS_FAIL_OPEN.test(a.text)) continue;
+      const { lines, i } = newSide(f, a);
+      if (i < 0) continue;
+      const blk = blockBelow(lines, i);
+      if (!blk.body.some(l => /\bthrow\b/.test(l.text))) add(p, a.line, null, a.text, undefined, true);
+    }
     for (const { f, a, p } of addedLines(ctx, ctx.isTest)) {
       const lang = language(p);
       const t = a.text;

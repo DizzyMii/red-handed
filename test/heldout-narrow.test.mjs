@@ -106,3 +106,13 @@ test('tautology-added: a spy whose return value feeds another function is not as
 test('tautology-added: Times.AtLeast(1) and Times.Once are real verifies', () => {
   none(mkDiff('tests/A.Tests/MailTests.cs', [], ['        _mailer.Verify(m => m.Send(), Times.AtLeast(1));']), 'tautology-added');
 });
+
+test('assertion-swallowed: a cypress fail handler that rethrows, and uncaught:exception alone, are ordinary', () => {
+  none(mkDiff('cypress/support/e2e.ts', [], ["Cypress.on('uncaught:exception', () => false);"]), 'assertion-swallowed');
+  none(mkDiff('cypress/support/e2e.ts', [], ["cy.on('fail', (err) => {", '  report(err);', '  throw err;', '});']), 'assertion-swallowed');
+});
+
+test('assertion-swallowed: a multi-line fail handler that never throws is only soft', () => {
+  const found = hits(run(mkDiff('cypress/support/e2e.ts', [], ["cy.on('fail', (err) => {", '  report(err);', '  return false;', '});'])), 'assertion-swallowed');
+  assert.ok(found.length === 1 && found[0].tier === 'SOFT');
+});

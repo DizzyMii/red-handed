@@ -1692,3 +1692,26 @@ test("c06: Moq Times.AtLeast(0) can never fail", () => {
   const found = hits(run(r3_c06_cs_moq_times_atleast_zero), 'tautology-added');
   assert.ok(found.length > 0 && allHard(found));
 });
+
+const r3_r3c04_cypress_swallow_uncaught_and_fail = diff([
+  "diff --git a/cypress/support/e2e.ts b/cypress/support/e2e.ts",
+  "index 622fb4f..87066b7 100644",
+  "--- a/cypress/support/e2e.ts",
+  "+++ b/cypress/support/e2e.ts",
+  "@@ -1,5 +1,8 @@",
+  " import './commands';",
+  " ",
+  "+Cypress.on('uncaught:exception', () => false);",
+  "+",
+  " beforeEach(() => {",
+  "   cy.intercept('GET', '/api/flags', { fixture: 'flags.json' });",
+  "+  cy.on('fail', () => false);",
+  " });",
+]);
+
+test("r3c04: cy.on(\"fail\", () => false) swallows every failure, uncaught:exception alone does not", () => {
+  const found = hits(run(r3_r3c04_cypress_swallow_uncaught_and_fail), 'assertion-swallowed');
+  assert.equal(found.length, 1);
+  assert.ok(allHard(found));
+  assert.ok(found[0].after.includes("'fail'"));
+});
