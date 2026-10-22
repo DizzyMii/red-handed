@@ -70,6 +70,8 @@ git diff main | npx red-handed -
 npx red-handed changes.patch
 ```
 
+If the range moves a lot of files, make the diff with `git -c diff.renameLimit=0 diff -M main`. Past git's rename limit (1000 files by default) a moved test shows up as a deleted one.
+
 Flags: `--format terminal|markdown|json` (`--json` for short), `--strict` to exit 1 on SUSPICIOUS too, `--no-color`, `--max <n>` to cap the findings printed (default 30). `npx red-handed rules` lists every check.
 
 Exit code is 0 for CLEAN or SUSPICIOUS, 1 for CAUGHT, 2 if it could not run.
