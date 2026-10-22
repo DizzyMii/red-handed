@@ -652,9 +652,33 @@ const KEYWORDS = new Set([...NOT_A_NAME, 'true', 'false', 'null', 'undefined', '
 
 // The refs on one removed test line: calls (with arity), Recv.FIELD and bare names, new Name(...),
 // and string literals that look like resource ids. Comments and import lines give none.
+// The failure message taken off a check before its refs are read: what a message mentions
+// ("missing: " + dir.toAbsolutePath()) is printed, never checked. Wider than dropMessage, which
+// must only drop plain literals: here a message is any extra argument that starts with a string.
+function withoutMessage(text, t) {
+  const py = /^(\s*assert\s+)(.*)$/.exec(text);
+  if (py && t.lang === 'py') {
+    const parts = splitTop(py[2]);
+    return parts.length > 1 && /^\s*f?["']/.test(parts[parts.length - 1]) ? py[1] + parts.slice(0, -1).join(',') : text;
+  }
+  const m = /(?<![\w$])(?:([\w$]+)\.)?(assert\w+)\s*\(/.exec(text);
+  if (!m) return text;
+  const open = m.index + m[0].length - 1;
+  const close = closeOf(text, open);
+  if (close < 0) return text;
+  const parts = splitTop(text.slice(open + 1, close));
+  if (parts.length <= (ONE_ARG.test(m[2]) ? 1 : 2)) return text;
+  const first = t.junit4 && (!m[1] || m[1] === 'Assert');
+  const at = first ? 0 : parts.length - 1;
+  if (!/^\s*["'`]/.test(parts[at])) return text;
+  // Blanked, not dropped, so the check keeps its arity.
+  return text.slice(0, open + 1) + parts.map((s, k) => (k === at ? ' ""' : s)).join(',') + text.slice(close);
+}
+
 export function refsOf(text, f) {
   if (isCommentLine(text) || IMPORT_LINE.test(text)) return [];
   const t = testContext(f);
+  text = withoutMessage(text, t);
   const refs = rawRefs(text, t);
   // A check on a local set from a call is a check on that call: "var product = Radar.match(x)" then
   // "assertTrue(product.isEmpty())" is about Radar.match, and so is a call to a local helper
@@ -670,7 +694,7 @@ export function refsOf(text, f) {
   const local = (r) => (r.recv ? t.inits.has(r.recv) && !t.locals.has(r.recv) : r.kind === 'call' && t.inits.has(r.name));
   const value = (r) => (r.recv ? t.inits.has(r.recv) : false) || (r.kind === 'call' && r.recv === '');
   return refs
-    .filter(r => r.recv || !t.own.has(r.name))
+    .filter(r => !t.own.has(r.recv ? r.recv.split('.')[0] : r.name))
     .map(r => ({ ...r, value: value(r), where: r.kind === 'resource' ? null : local(r) ? NOWHERE : whereFor(t, r) }));
 }
 
