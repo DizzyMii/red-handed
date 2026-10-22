@@ -6,6 +6,7 @@ import {
 } from './classify.mjs';
 import {
   splitTop, closeOf, moveKey, looseMoveKey, dropMessage, declarationsOn, sourceIndex, testContext, modKey, subjectRefs, removedWithFeature, pyModMatch, statementOf,
+  excusedRefs, TREE_SUFFIX, refsOf, codeOnly, resolveRelative,
 } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
@@ -1258,7 +1259,7 @@ function pairRewrites(ctx, f, removed, added) {
       if (!basis.has(r)) {
         const refs = subjectRefs(ctx, f, r.text);
         let b = refs.length ? rewriteBasis(idx, refs) : null;
-        if (mirrorRef && !b?.changed && !refs.some(q => q.status === 'kept')) b = { tx: b?.tx ?? null, why: b?.why ?? null, changed: mirrorRef };
+        if (mirrorRef && !b?.changed && !refs.some(q => q.status === 'kept' || q.status === 'neutral')) b = { tx: b?.tx ?? null, why: b?.why ?? null, changed: mirrorRef };
         basis.set(r, b);
       }
       const b = basis.get(r);
@@ -1397,6 +1398,79 @@ function helperPairs(ctx, f, removed) {
   return out;
 }
 
+// Does test record g import name from source record home, and use it on a line of code (not only
+// in a comment, a string or the import)?
+function importsFrom(g, name, home) {
+  const lang = language(g.newPath);
+  const lines = g.hunks.flatMap(h => h.lines.filter(l => l.kind !== '-').map(l => l.text));
+  const word = new RegExp(`(?<![\\w$.])${escapeName(name)}(?![\\w$])`);
+  if (!codeOnly(lines.join('\n'), lang).some(t => !IMPORT_LINE.test(t) && word.test(t))) return false;
+  const pkg = (home.pkg ?? '').replace(/\./g, '\\.');
+  if (lang === 'js') {
+    const bound = new RegExp(`[{,]\\s*${escapeName(name)}\\s*(?:[,}]|\\bas\\b)`);
+    return lines.some(t => { const m = RELATIVE_IMPORT.exec(t); return m != null && resolveRelative(g.newPath, m[1] ?? m[2]) === home.mod && bound.test(t); });
+  }
+  if (lang === 'jvm') {
+    return lines.some(t => new RegExp(`^\\s*import\\s+${pkg}\\.${escapeName(name)}\\s*;`).test(t) || new RegExp(`^\\s*package\\s+${pkg}\\s*;`).test(t));
+  }
+  if (lang === 'py') {
+    return lines.some(t => { const m = /^\s*from\s+([\w.]+)\s+import\s+(.+)$/.exec(t); return m != null && word.test(m[2]) && pyModMatch(home.mod, [m[1].replace(/^\.+/, '').replace(/\./g, '/')]); });
+  }
+  return false;
+}
+
+// With the head tree: does every check of deleted test f already run in a test the head has? The
+// candidates are head test files the runner collects that share f's name, or are named for the
+// code f tested or for the file that code moved to. No partial credit, as for a move in the diff.
+function coveredInHead(ctx, f, stems) {
+  const trees = ctx.trees;
+  const listed = trees.list('head');
+  if (!listed) return false;
+  const checks = f.removed.filter(r => isAssertLine(r.text));
+  if (!checks.length) return false;
+  const name = baseName(f.oldPath);
+  const candidates = [...listed].filter(p => p !== f.oldPath && ctx.isTest(p) && runnerCollects(p)
+    && (baseName(p) === name || stems.has(stemOf(baseName(p))))).sort().slice(0, 5);
+  const pool = new Map();
+  for (const p of candidates) {
+    const text = trees.read('head', p);
+    if (typeof text !== 'string') continue;
+    const lines = text.split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    // The head copy read as a new file, so inLiveTest works on it unchanged.
+    const g = { oldPath: null, newPath: p, status: 'added', binary: false, removed: [],
+      hunks: [{ oldStart: 0, newStart: 1, lines: lines.map((t, i) => ({ kind: '+', text: t, oldLine: null, newLine: i + 1 })) }],
+      added: lines.map((t, i) => ({ line: i + 1, text: t, hunk: 0 })) };
+    const jupiter = /\borg\.junit\.jupiter\b/.test(text);
+    const junit = { jupiter, junit4: !jupiter && /\borg\.junit\.(?:Assert|Test)\b/.test(text) };
+    for (const a of g.added) {
+      if (!isAssertLine(a.text)) continue;
+      const key = moveKey(a.text, junit);
+      if (!pool.has(key)) pool.set(key, []);
+      pool.get(key).push({ g, a });
+    }
+  }
+  const junit = testContext(f);
+  const used = new Set();
+  return checks.every(r => {
+    const e = (pool.get(moveKey(r.text, junit)) ?? []).find(x => !used.has(x) && inLiveTest(x.g, x.a));
+    if (e) used.add(e);
+    return e != null;
+  });
+}
+
+// Git often lines up the @Test of a removed method with the @Test of the one that replaced it, so
+// the header is a context line. It opens a new test when the first line below it on the new side
+// that is not blank, a comment or an annotation is an added method declaration.
+function opensNewTest(lines, i, lang) {
+  for (let j = i + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (l.kind === '-' || !l.text.trim() || isCommentLine(l.text) || /^\s*@/.test(l.text)) continue;
+    return l.kind === '+' && declarationsOn(l.text, lang).some(d => d.kind === 'fn');
+  }
+  return false;
+}
+
 // A removed test whose code was renamed or re-shaped, when some test this change adds calls the new
 // shape. The first changed ref, or null.
 function reshapedTo(ctx, f, block, isHeader) {
@@ -1405,12 +1479,14 @@ function reshapedTo(ctx, f, block, isHeader) {
   const names = refs.map(q => (q.status === 'renamed' ? q.to : q.name));
   const calls = new RegExp(`(?<![\\w$])(${names.map(escapeName).join('|')})\\s*\\(`);
   for (const g of ctx.files) {
+    const lang = language(pathOf(g));
     for (const h of g.hunks) {
       let inNew = false;
-      for (const l of h.lines) {
+      for (let i = 0; i < h.lines.length; i++) {
+        const l = h.lines[i];
         if (l.kind === '-') continue;
-        if (isHeader(l.text)) inNew = l.kind === '+';
-        else if (inNew && l.kind === '+' && calls.test(l.text)) return refs[0];
+        if (isHeader(l.text)) inNew = l.kind === '+' || opensNewTest(h.lines, i, lang);
+        else if (inNew && l.kind === '+' && calls.test(codeOnly(l.text, lang)[0])) return refs[0];
       }
     }
   }
@@ -1430,7 +1506,6 @@ export const RULES = [
     // of the implementation, and a moved implementation still needs its test.
     const idx = sourceIndex(ctx);
     const goneSources = idx.deletedSources.filter(s => s.reallyGone);
-    const goneKeys = new Map(goneSources.map(s => [modKey(s.path), s.path]));
     const dirOf = (p) => p.split('/').slice(0, -1).join('/');
     // Where a test's code usually sits: beside it, under src/main for src/test, and under src/ or
     // the parent for a test/, tests/ or __tests__/ directory.
@@ -1441,21 +1516,21 @@ export const RULES = [
     };
     // The deleted source a deleted test points at, by import, package or mirrored name. A name
     // match alone is not enough: any small file of that name could be deleted alongside.
-    const goneSourceFor = (f) => {
+    const sourceFor = (f, sources) => {
       const t = testContext(f);
       const code = f.removed.filter(r => !isCommentLine(r.text)).map(r => r.text);
-      for (const s of goneSources) {
+      for (const s of sources) {
         if (s.rec.pkg != null && t.pkg != null) {
           for (const name of s.primary) {
-            if (t.types.get(name)?.has(s.rec.pkg)) return s.path;
+            if (t.types.get(name)?.has(s.rec.pkg)) return s;
             const named = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\b`);
-            if ((s.rec.pkg === t.pkg || t.wild.has(s.rec.pkg)) && code.some(x => named.test(x))) return s.path;
+            if ((s.rec.pkg === t.pkg || t.wild.has(s.rec.pkg)) && code.some(x => named.test(x))) return s;
           }
         }
         if (s.rec.lang === 'py' && pyModMatch(s.rec.mod, [...t.mods])
-          && [...s.primary].some(name => code.some(x => new RegExp(`(?<![\\w$.])${name}\\b`).test(x)))) return s.path;
+          && [...s.primary].some(name => code.some(x => new RegExp(`(?<![\\w$.])${name}\\b`).test(x)))) return s;
         const stem = stemOf(baseName(f.oldPath));
-        if (stem && stem === stemOf(baseName(s.path)) && mirrors(f.oldPath).has(dirOf(s.path))) return s.path;
+        if (stem && stem === stemOf(baseName(s.path)) && mirrors(f.oldPath).has(dirOf(s.path))) return s;
       }
       const dir = f.oldPath.split('/').slice(0, -1);
       for (const r of f.removed) {
@@ -1466,8 +1541,31 @@ export const RULES = [
           if (seg === '..') parts.pop();
           else if (seg !== '.') parts.push(seg);
         }
-        const hit = goneKeys.get(modKey(parts.join('/')));
+        const hit = sources.find(s => modKey(s.path) === modKey(parts.join('/')));
         if (hit) return hit;
+      }
+      return null;
+    };
+    const goneSourceFor = (f) => sourceFor(f, goneSources)?.path ?? null;
+    // A deleted source whose primary names another file declares again moved there.
+    const movedSources = idx.deletedSources.filter(s => !s.reallyGone);
+    // A test deleted while the code it tests moved, and a new test of that code came along: the
+    // new home and the new test, or null. The new test has to import the moved name from its new
+    // home, use it in code, and make at least as many real checks in live tests as the old one did.
+    const movedWithTest = (f) => {
+      const m = f.removed.filter(r => isAssertLine(r.text)).length;
+      const s = m ? sourceFor(f, movedSources) : null;
+      if (!s) return null;
+      const homes = idx.newHomes(s, { top: true });
+      for (const home of homes) {
+        const names = [...s.primary];
+        for (const g of ctx.files) {
+          if (g === f || g.newPath == null || (g.status !== 'added' && g.status !== 'modified') || !ctx.isTest(g.newPath) || !runnerCollects(g.newPath)) continue;
+          if (!names.some(n => importsFrom(g, n, home))) continue;
+          const n = g.added.filter(a => isAssertLine(a.text) && inLiveTest(g, a)).map(a => statementOf(g, a, '+'))
+            .filter(t => !WEAK.test(t) && !TAUTOLOGY.some(re => re.test(t))).length;
+          if (n >= m) return { home: home.path, test: g.newPath, n };
+        }
       }
       return null;
     };
@@ -1479,16 +1577,16 @@ export const RULES = [
       const checks = f.removed.filter(r => isAssertLine(r.text)).map(r => statementOf(f, r, '-'));
       const idx = sourceIndex(ctx);
       const out = (q) => q.status === 'gone' || (q.status === 'arity' && q.shrunk);
-      const edited = (q) => q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where);
       const per = checks.map(t => subjectRefs(ctx, f, t));
-      const ok = (refs) => !refs.length || (refs.some(out) && refs.every(q => out(q) || edited(q)));
+      const ok = (refs) => !refs.length || excusedRefs(idx, refs, out);
       const first = per.flat().find(out);
       if (!first || !per.every(ok)) return null;
       const gone = { symbol: first.name, file: first.file, reshaped: first.status === 'arity' };
+      const seen = first.tree ? TREE_SUFFIX : '';
       const source = goneSourceFor(f);
       if (source) return `A test file was deleted together with the code it tests (${source} is deleted in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
-      if (gone.reshaped) return `A test file was deleted together with the code it tests (${gone.symbol} loses a parameter it was called with in ${gone.file}). Check the behaviour it pinned was meant to go.`;
-      return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.`;
+      if (gone.reshaped) return `A test file was deleted together with the code it tests (${gone.symbol} loses a parameter it was called with in ${gone.file}). Check the behaviour it pinned was meant to go.${seen}`;
+      return `A test file was deleted together with the code it tests (${gone.symbol} is removed from ${gone.file} in this change too). That is normal when a feature is removed. Check the feature was meant to go.${seen}`;
     };
     for (const f of ctx.files) {
       if (f.oldPath == null || !ctx.isTest(f.oldPath) || isSnapshotPath(f.oldPath)) continue;
@@ -1508,8 +1606,19 @@ export const RULES = [
       // Every check it made now runs in another test of this change.
       const moved = moveCoverage(ctx).result.get(f);
       if (moved?.covered) continue;
+      // Or in a test the head tree already has, next to the code or where the code went.
+      if (f.status === 'deleted' && ctx.trees?.available) {
+        const src = sourceFor(f, idx.deletedSources);
+        const stems = new Set(src ? [src.path, ...idx.newHomes(src).map(r => r.path)].map(p => stemOf(baseName(p))) : []);
+        if (coveredInHead(ctx, f, stems)) continue;
+      }
       const plain = language(f.oldPath) === 'other' || (f.status === 'deleted' && !f.binary && !f.removed.some(testy));
       const feature = !plain && f.status === 'deleted' ? featureMessage(f) : null;
+      const home = !plain && !feature && f.status === 'deleted' ? movedWithTest(f) : null;
+      if (home) {
+        add(f.oldPath, 0, f.oldPath, null, `A test file was deleted while the code it tests moved to ${home.home}. ${home.test} is a new test of that code with ${home.n} checks. Check it covers what the old one did.`, true);
+        continue;
+      }
       // A move whose new copy sits past the cut looks like a delete. Padding a diff is easy, so it stays hard.
       const cut = ctx.truncated && f.status === 'deleted'
         && !ctx.files.some(g => g.newPath != null && g !== f && baseName(g.newPath) === baseName(f.oldPath));
@@ -1639,23 +1748,28 @@ export const RULES = [
         const block = wholeTestAround(f, r);
         const gone = (block && removedWithFeature(ctx, f, block)) || removedWithFeature(ctx, f, [r.text]);
         if (!gone) { removed.push(r); continue; }
-        add(pathOf(f), r.line, r.text, null, `This assertion was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+        add(pathOf(f), r.line, r.text, null, `This assertion was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.${gone.tree ? TREE_SUFFIX : ''}`, true);
       }
       // A check rewritten to the code's new shape pairs with its new form and drops out of the count.
       // An honest API change and a test bent to fit a bug look the same, so the pair stays as SOFT.
       const added = scope.added.filter(a => isAssertLine(a.text)).map(a => ({ ...a, text: statementOf(f, a, '+') }));
-      const { same, pairs, addedLeft } = pairRewrites(ctx, f, removed, added);
+      // The head tree can show the old form of a call still declared outside the hunk. Such a check
+      // was never reshaped: when no added check calls that form, it is lost whatever the count says.
+      const callsForm = (q) => added.some(a => refsOf(a.text, f).some(x => x.kind === 'call' && x.name === q.name && x.arity === q.arity));
+      const lostForm = removed.filter(x => subjectRefs(ctx, f, x.text).some(q => q.overload && !callsForm(q)));
+      for (const r of lostForm) add(pathOf(f), r.line, r.text, null);
+      const { same, pairs, addedLeft } = pairRewrites(ctx, f, removed.filter(x => !lostForm.includes(x)), added);
       for (const [r, { a, ref }] of pairs) {
         add(pathOf(f), r.line, r.text, a.text, `This assertion was rewritten in the same change that changed ${ref.name} in ${ref.file}. That is how an honest API change looks, and also how a test gets bent to fit a bug, so red-handed flags it for review instead of failing it.`, true);
       }
-      const helped = helperPairs(ctx, f, removed.filter(r => !same.has(r) && !pairs.has(r)));
+      const helped = helperPairs(ctx, f, removed.filter(r => !same.has(r) && !pairs.has(r) && !lostForm.includes(r)));
       for (const [r, name] of helped) {
         add(pathOf(f), r.line, r.text, null, `This assertion was replaced by a call to ${name}, which this change adds with matching checks. Check the helper asserts what the old line did.`, true);
       }
       // A check on a signature that lost a parameter cannot be written the old way any more. A cheat
       // can drop a parameter too, so it stays on the page as SOFT, out of the count. When the file
       // adds as many checks as it lost, nothing is reported, as before.
-      const left = removed.filter(x => !same.has(x) && !pairs.has(x) && !helped.has(x));
+      const left = removed.filter(x => !same.has(x) && !pairs.has(x) && !helped.has(x) && !lostForm.includes(x));
       const unpaired = [];
       const reshaped = [];
       for (const r of left) {
@@ -1699,7 +1813,7 @@ export const RULES = [
           // the precise check named nothing in the diff that stays as it was.
           const mirror = sourceIndex(ctx).mirrorEdited(pathOf(f));
           const changed = strongRefs.map(refs => refs.find(q => q.status === 'gone' || q.status === 'renamed' || q.status === 'arity')).find(Boolean)
-            ?? (mirror && !strongRefs.flat().some(q => q.status === 'kept') ? { name: null, file: mirror } : null);
+            ?? (mirror && !strongRefs.flat().some(q => q.status === 'kept' || q.status === 'neutral') ? { name: null, file: mirror } : null);
           // A weak line that is the rewrite of a line just as weak loosened nothing.
           const asserts = (kind, side) => code(kind).filter(l => isAssertLine(l.text)).map(l => ({ line: l[side], text: l.text, l }));
           const { same, pairs } = pairRewrites(ctx, f, asserts('-', 'oldLine'), asserts('+', 'newLine'));
@@ -2010,7 +2124,7 @@ export const RULES = [
         const gone = removedWithFeature(ctx, f, block);
         const reshaped = !gone && reshapedTo(ctx, f, block, header);
         const shrunk = !gone && !reshaped && removedWithFeature(ctx, f, block, { shrunk: true });
-        if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.`, true);
+        if (gone) add(pathOf(f), r.line, r.text, null, `A test was removed along with ${gone.symbol}, which this change deletes from ${gone.file}. Fine if that feature was dropped on purpose.${gone.tree ? TREE_SUFFIX : ''}`, true);
         else if (shrunk) add(pathOf(f), r.line, r.text, null, `A test was removed that called ${shrunk.symbol} with a parameter this change removes from it in ${shrunk.file}. Check the behaviour it pinned was meant to go.`, true);
         else if (reshaped) add(pathOf(f), r.line, r.text, null, `A test was replaced in the same change that renamed or re-shaped ${reshaped.name} in ${reshaped.file}. Check the new test covers what the old one did.`, true);
         else add(pathOf(f), r.line, r.text, null, undefined, addedH > 0);

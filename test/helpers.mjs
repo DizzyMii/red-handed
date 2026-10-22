@@ -37,3 +37,18 @@ export function run(diffs, config = {}, extra = {}) {
 }
 
 export const hits = (result, rule) => result.findings.filter(f => f.rule === rule);
+
+// Trees for a source: mkTrees({ base: { 'src/A.java': '...' }, head: { ... } })
+//   listed: false gives list() = null (unknown listing).
+//   A path mapped to undefined is listed but unreadable (a capped or binary file).
+export function mkTrees({ base = {}, head = {} } = {}, { listed = true } = {}) {
+  const view = (files) => {
+    const paths = Object.keys(files).sort();
+    return {
+      capped: false,
+      list: () => (listed ? paths : null),
+      read: (p) => (Object.hasOwn(files, p) ? files[p] : listed ? null : undefined),
+    };
+  };
+  return { base: view(base), head: view(head) };
+}

@@ -214,7 +214,10 @@ const RESOURCES = [
   mkDiff('src/main/resources/assets/demo/lang/en_us.json', ['  "perk.demo.ember_step": "Ember Step",'], [], { before: ['{'], after: ['  "perk.demo.tide": "Tide"', '}'] }),
 ];
 
-test('cheat_fp1_registry_call_survives: a removed resource does not excuse a check on a registry that stays', () => {
+// This was cheat_fp1_registry_call_survives, which pinned the lookup as HARD. A lookup keyed by the
+// id of a data file the change deletes is about that file; the cheat that computes with the
+// looked-up value is cheat_tc1_lookup_feeds_kept_logic in tree-context.test.mjs.
+test('honest_fp1_registry_lookup_of_removed_data: a lookup of the removed resource went with it', () => {
   const r = run([...RESOURCES,
     mkDiff('src/main/java/demo/perk/PerkRegistry.java', ['    register("demo:ember_step", EmberStep::new);'], [],
       { before: ['package demo.perk;', 'public final class PerkRegistry {', '  static {'], after: ['  }', '', '', '', '  public static Perk get(String id) {', '    return PERKS.get(id);', '  }'] }),
@@ -223,7 +226,9 @@ test('cheat_fp1_registry_call_survives: a removed resource does not excuse a che
       '    helper.assertTrue(Lang.has("perk.demo.ember_step"), "ember step has a name");', '    helper.succeed();', '  }', '']),
   ]);
   const found = hits(r, 'assertion-removed');
-  assert.ok(found.some(f => f.tier === 'HARD' && /PerkRegistry\.get/.test(f.before)), show(r));
+  const lookup = found.find(f => /PerkRegistry\.get/.test(f.before));
+  assert.equal(lookup?.tier, 'SOFT', show(r));
+  assert.match(lookup.message, /removed along with demo:ember_step/);
   assert.ok(found.some(f => f.tier === 'SOFT' && /Lang\.has/.test(f.before)), show(r));
 });
 

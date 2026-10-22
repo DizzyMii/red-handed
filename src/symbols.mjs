@@ -610,6 +610,17 @@ export function sourceIndex(ctx) {
     },
     newlyDeclared: (name) => named(name).some(d => d.side === '+') && !named(name).some(d => d.side !== '+'),
     resourceGone: (id) => resources.get(id) ?? null,
+    // For the tree lookups: a + declaration of name under owner, the live declarations a ref
+    // points at, and whether the change edits code in a file at all.
+    addedUnder: (name, owner) => named(name).some(d => d.side === '+' && d.owner === owner),
+    liveDecls: (name, where) => named(name).filter(d => d.side !== '-' && where(d)),
+    fileEdited: (path) => records.some(r => (r.path === path || norm(r.f.oldPath ?? '') === path) && (r.f.status === 'deleted' || r.f.hunks.some(h => hunkEdits(h)))),
+    // The files that declare on + lines what deleted source s declared: its new home, when it
+    // moved. With `top`, only its primary names at top level count.
+    newHomes(s, { top = false } = {}) {
+      const names = top ? s.primary : new Set(decls.filter(d => d.rec === s.rec && d.side === '-' && d.kind !== 'field').map(d => d.name));
+      return [...new Set(decls.filter(d => d.side === '+' && d.rec !== s.rec && names.has(d.name) && (!top || d.top)).map(d => d.rec))];
+    },
   };
   indexCache.set(ctx, idx);
   return idx;
@@ -618,7 +629,7 @@ export function sourceIndex(ctx) {
 // ---- what a test file points at -------------------------------------------------------------
 
 const RELATIVE_SPEC = /^\.{1,2}\//;
-function resolveRelative(fromPath, spec) {
+export function resolveRelative(fromPath, spec) {
   const parts = dirOf(fromPath).split('/').filter(Boolean);
   for (const seg of spec.split('/')) {
     if (seg === '..') parts.pop();
@@ -663,6 +674,16 @@ export function testContext(f) {
   if (info.jupiter) info.junit4 = false;
   // Names the test file declares for itself (its constants, helpers and nested types) are its own.
   info.own = new Set(f.hunks.flatMap(h => h.lines.filter(l => l.kind !== '+')).flatMap(l => declarationsOn(l.text, lang).map(d => d.name)));
+  readTestLines(info, lines);
+  // A test's own constants stand for what they are set to, when the whole file is in view.
+  info.consts = info.whole ? ownConstants(lines, lang) : new Map();
+  testCache.set(f, info);
+  return info;
+}
+
+// The imports, locals and calls a test file's lines set up, into info.
+function readTestLines(info, lines) {
+  const { path, lang } = info;
   const bindMod = (local, key) => { info.names.set(local, key); info.mods.add(key); };
   for (const t of lines) {
     if (OVERLOADS.has(lang)) {
@@ -719,8 +740,55 @@ export function testContext(f) {
       }
     }
   }
-  testCache.set(f, info);
-  return info;
+}
+
+// Constants a test file declares at its top level, with the statement that sets each, joined over
+// up to 8 lines: static final in jvm, a top-level const in js, a module-level NAME = in python.
+function ownConstants(lines, lang) {
+  const out = new Map();
+  const START = OVERLOADS.has(lang) ? /\bstatic\s+final\s+[\w$<>\[\],.? ]+?\s+([A-Za-z_$][\w$]*)\s*=(.*)$/
+    : lang === 'js' ? /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=(.*)$/
+      : lang === 'py' ? /^([A-Za-z_]\w*)\s*(?::[^=]+)?=(?!=)(.*)$/ : null;
+  if (!START) return out;
+  const done = (t) => (OVERLOADS.has(lang) ? t.replace(STRING, '""').includes(';') : openDepth(t) <= 0);
+  for (let i = 0; i < lines.length; i++) {
+    const m = START.exec(lines[i]);
+    if (!m) continue;
+    let text = m[2].trim();
+    for (let j = i + 1; j < lines.length && j - i < 8 && !done(text); j++) text += ' ' + lines[j].trim();
+    out.set(m[1], text);
+  }
+  return out;
+}
+
+// The rest of a test file shown in part, read from its base copy: imports above the hunk, its own
+// constants and helpers. What the diff shows of a local wins, since two tests can use one name for
+// two things. True when the context changed, so the caller reads its refs again. Tried once a file.
+export function completeFromBase(ctx, f) {
+  const t = testContext(f);
+  if (t.whole || t.triedBase || !ctx.trees) return false;
+  t.triedBase = true;
+  const text = ctx.trees.read('base', norm(f.oldPath ?? f.newPath));
+  if (typeof text !== 'string') { t.baseUnknown = text === undefined; return false; }
+  const lines = text.split('\n');
+  const b = { path: t.path, lang: t.lang, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map() };
+  readTestLines(b, lines);
+  const pkg = OVERLOADS.has(t.lang) && lines.map(l => /^\s*(?:package|namespace)\s+([\w.]+)/.exec(l)).find(Boolean);
+  if (pkg) t.pkg = pkg[1];
+  for (const [k, v] of b.types) { if (!t.types.has(k)) t.types.set(k, new Set()); for (const p of v) t.types.get(k).add(p); }
+  for (const w of b.wild) t.wild.add(w);
+  for (const m of b.mods) t.mods.add(m);
+  for (const key of ['statics', 'names', 'locals', 'inits']) for (const [k, v] of b[key]) if (!t[key].has(k)) t[key].set(k, v);
+  if (lines.some(l => /\borg\.junit\.jupiter\b/.test(l))) { t.jupiter = true; t.junit4 = false; }
+  else if (!t.jupiter && lines.some(l => /\borg\.junit\.(?:Assert|Test)\b/.test(l))) t.junit4 = true;
+  // A field with a type is a value the test holds, so a call on it still names that type's code.
+  // Read in pieces, so a one-line helper "static int total(Cart c) { return c.sum(); }" counts.
+  for (const l of codeOnly(text, t.lang)) {
+    for (const piece of l.split(/(?<=[;{}])/)) for (const d of declarationsOn(piece, t.lang)) if (!b.locals.has(d.name)) t.own.add(d.name);
+  }
+  t.consts = ownConstants(lines, t.lang);
+  t.whole = true;
+  return true;
 }
 
 // A module path from an import. "from cart import" is cart.py at the root or under src/ or lib/,
@@ -756,6 +824,8 @@ function whereFor(t, ref) {
       where.loose = ownerOk;
       where.type = outer;
       where.inPkg = (pkg) => pkgs.has(pkg);
+      where.inner = inner;
+      where.pkgs = [...pkgs];
       where.project = imported ? [...imported].some(p => sameProject(p, t.pkg))
         : t.whole && !JAVA_LANG.has(outer) && [...t.wild].every(p => sameProject(p, t.pkg));
       return where;
@@ -769,6 +839,7 @@ function whereFor(t, ref) {
       where.project = sameProject(s.pkg, t.pkg);
       // The import names the owner outright, so a namesake declared elsewhere in the diff is not it.
       where.loose = () => false;
+      Object.assign(where, { type: s.owner, inner: s.owner, pkgs: [s.pkg] });
       return where;
     }
     return (d) => d.rec.pkg === t.pkg || t.wild.has(d.rec.pkg) || (t.types.get(d.owner)?.has(d.rec.pkg) ?? false);
@@ -776,14 +847,14 @@ function whereFor(t, ref) {
   if (t.lang === 'js') {
     // Relative imports are the project's own code.
     const key = t.names.get(recv ?? ref.name);
-    if (key) return Object.assign((d) => d.rec.mod === key, { project: true });
+    if (key) return Object.assign((d) => d.rec.mod === key, { project: true, keys: [key] });
     if (recv && /^[a-z_$]/.test(recv) && t.mods.size) return (d) => t.mods.has(d.rec.mod);
     return mirrored(t, recv);
   }
   if (t.lang === 'py') {
     // A module under a top-level directory the diff touches is the project's own.
     const keys = t.names.get(recv ?? ref.name);
-    if (keys) return Object.assign((d) => pyModMatch(d.rec.mod, keys), { project: (idx) => keys.some(k => idx.roots.has(k.split('/')[0])) });
+    if (keys) return Object.assign((d) => pyModMatch(d.rec.mod, keys), { project: (idx) => keys.some(k => idx.roots.has(k.split('/')[0])), keys });
     if (recv && /^[a-z_]/.test(recv) && t.mods.size) return (d) => pyModMatch(d.rec.mod, [...t.mods]);
     return mirrored(t, recv);
   }
@@ -836,6 +907,8 @@ export function refsOf(text, f) {
   const code = text.replace(STRING, (s) => s[0] + s[0]);
   for (const name of new Set(code.match(/(?<![\w$.])[A-Za-z_$][\w$]*/g) ?? [])) {
     if (t.inits.has(name)) refs.push(...rawRefs(t.inits.get(name), t));
+    // Only its resource ids: fromNamespaceAndPath(MODID, ...) is plumbing, not the subject.
+    if (t.consts?.has(name)) refs.push(...rawRefs(t.consts.get(name), t).filter(r => r.kind === 'resource').map(r => ({ ...r, via: name })));
   }
   // A local the test also gives a type (Plan dull = Plan.lay(3)) points at that type instead. What
   // is read off a value (such a local, or the result of a call: f(x).size()) only counts when it is
@@ -867,14 +940,18 @@ function rawRefs(text, t) {
   const taken = new Set();
   // A receiver keeps the outer names of a nested type: Cues.Context.held(...) is called on Cues.Context.
   const chain = (s) => (s ?? '').replace(/\s+/g, '');
+  // new Layer() { ... } is the test's own implementation of Layer: the type it implements is not
+  // what a check on it is about, what it calls is.
+  const anonymous = (start, open) => /\bnew\s+$/.test(code.slice(0, start)) && /^\s*\{/.test(code.slice(closeOf(code, open) + 1 || code.length));
   for (const m of code.matchAll(/(?:((?:[A-Z][\w$]*\s*\.\s*)*[A-Za-z_$][\w$]*)\s*)?\.\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     const at = m.index + m[0].length - 1;
     taken.add(at);
+    if (anonymous(m.index, at)) continue;
     refs.push({ kind: 'call', name: m[2], recv: chain(m[1]), arity: argsAt(at) });
   }
   for (const m of code.matchAll(/(?<![\w$.])(new\s+)?([A-Za-z_$][\w$]*)\s*\(/g)) {
     const at = m.index + m[0].length - 1;
-    if (taken.has(at) || KEYWORDS.has(m[2])) continue;
+    if (taken.has(at) || KEYWORDS.has(m[2]) || (m[1] && anonymous(m.index + m[1].length, at))) continue;
     refs.push(m[1] ? { kind: 'type', name: m[2], recv: null, arity: null } : { kind: 'call', name: m[2], recv: null, arity: argsAt(at) });
   }
   for (const m of code.matchAll(/(?<![\w$.])((?:[A-Z][\w$]*\s*\.\s*)*[A-Z][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[(.\w$])/g)) {
@@ -897,9 +974,10 @@ function rawRefs(text, t) {
   }
   return refs;
 }
-
 // What the change did to the code a ref names: 'gone', 'renamed', 'arity' or 'kept', with the file
-// for the message. Null when the diff does not declare the name, so the ref says nothing.
+// for the message. Null when the diff does not declare the name, so the ref says nothing. A kept
+// ref carries its basis: 'unseen' (the diff never declares the name, but the ref points into the
+// project), 'loose' (declared, not where the ref points) or 'diff' (declared there and kept).
 export function refStatus(idx, ref) {
   const out = statusOf(idx, ref);
   return ref.value && out?.status === 'kept' ? null : out;
@@ -921,51 +999,309 @@ function statusOf(idx, ref) {
   // The assertion call itself (helper.assertTrue, Assert.assertEquals) is the check, not its subject.
   const check = ref.kind === 'call' && /^(?:assert|expect$|fail$|verify$)/.test(ref.name);
   const project = !check && (typeof ref.where?.project === 'function' ? ref.where.project(idx) : ref.where?.project === true);
-  const KEPT = { status: 'kept', file: null };
-  if (!idx.declared(ref.name)) return project ? KEPT : null;
-  if (!ref.where) return KEPT;
+  const kept = (basis) => ({ status: 'kept', file: null, basis });
+  if (!idx.declared(ref.name)) return project ? kept('unseen') : null;
+  if (!ref.where) return kept(null);
   // Declared in the diff, but not where this ref points. When the ref names its owner type and the
   // diff has no such type, it is a library name that happens to match (Items.DIAMOND). Otherwise
   // the diff may just not show the import, so the name still keeps the line from being excused.
   if (!idx.declaredIn(ref.name, ref.where)) {
-    return !project && ref.where.loose && !idx.declaredIn(ref.name, ref.where.loose) ? null : KEPT;
+    return !project && ref.where.loose && !idx.declaredIn(ref.name, ref.where.loose) ? null : kept('loose');
   }
   if (ref.kind === 'type') {
-    return idx.gone(ref.name, ref.where) ? { status: 'gone', file: idx.goneFrom(ref.name, ref.where) } : { status: 'kept', file: null };
+    return idx.gone(ref.name, ref.where) ? { status: 'gone', file: idx.goneFrom(ref.name, ref.where) } : kept('diff');
   }
   if (idx.renamed(ref.name, ref.where)) return { status: 'renamed', file: idx.goneFrom(ref.name, ref.where), to: idx.renamed(ref.name, ref.where) };
   const reshaped = idx.arityChanged(ref.name, ref.where);
   // shrunk: every signature left takes fewer arguments than this call passes, so a parameter the
   // check exercised is gone and the call cannot be written the old way.
   if (reshaped) return { status: 'arity', file: idx.goneFrom(ref.name, ref.where), shrunk: ref.arity != null && [...reshaped.to].every(a => a < ref.arity) };
-  if (idx.gone(ref.name, ref.where, ref.arity)) return { status: 'gone', file: idx.goneFrom(ref.name, ref.where) };
-  return { status: 'kept', file: idx.declaredIn(ref.name, ref.where) };
+  // byArity: an overload of another arity is still there, so only the arity says this one is gone.
+  if (idx.gone(ref.name, ref.where, ref.arity)) return { status: 'gone', file: idx.goneFrom(ref.name, ref.where), byArity: !idx.gone(ref.name, ref.where) };
+  return { status: 'kept', file: idx.declaredIn(ref.name, ref.where), basis: 'diff' };
 }
 
-// The refs on a line that the diff knows about, each with its status.
-export function subjectRefs(ctx, f, text) {
-  const idx = sourceIndex(ctx);
-  const out = [];
-  for (const r of refsOf(text, f)) {
-    const s = refStatus(idx, r);
-    if (s) out.push({ ...r, ...s });
+// ---- code the diff does not show, read from the trees ------------------------------------------
+//
+// A tree only settles what the diff leaves open, and evidence from a tree may only do what the
+// same evidence would do in the diff. Every lookup answers a status, or undefined for "not
+// known", which leaves the diff's answer as it was.
+
+export const TREE_SUFFIX = ' The diff does not show this part of the change; the files at its head do.';
+
+// A ref that, as the diff alone reads it, keeps a line from being excused.
+const blocks = (s) => s != null && (s.status === 'kept' || s.status === 'arity' || (s.status === 'gone' && s.byArity));
+
+const JVM_EXTS = ['.java', '.kt', '.scala', '.groovy'];
+const JS_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '/index.ts', '/index.js'];
+const SOURCE_EXT = /\.(java|kt|scala|groovy|cs|ts|tsx|mts|cts|js|jsx|mjs|cjs|py)$/;
+const memos = new WeakMap();
+const memoOf = (trees) => { if (!memos.has(trees)) memos.set(trees, new Map()); return memos.get(trees); };
+
+// The files in one tree that may declare what ref names: { exact, byStem }. exact ones can say gone
+// or kept; byStem ones (a file of the owner's name somewhere else) can only say kept, so an
+// unrelated namesake never makes something look gone. Null when the tree cannot say.
+function declaringPaths(ctx, ref, t, side) {
+  const trees = ctx.trees;
+  const w = ref.where;
+  const extra = ctx.config?.tests ?? [];
+  const usable = (p) => SOURCE_EXT.test(p) && !isTestPath(p, extra) && !JVM_RESOURCES_PATH.test(p);
+  let wanted;
+  let stem = null;
+  if (t.lang === 'jvm' || t.lang === 'cs') {
+    if (!w?.type) return null;
+    stem = w.type;
+    wanted = t.lang === 'cs' ? [] : (w.pkgs ?? [t.pkg]).filter(Boolean).flatMap(P => JVM_EXTS.map(e => `${P.replace(/\./g, '/')}/${w.type}${e}`));
+  } else if (t.lang === 'js') {
+    if (!w?.keys) return null;
+    wanted = w.keys.flatMap(k => JS_EXTS.map(e => k + e));
+  } else if (t.lang === 'py') {
+    if (!w?.keys) return null;
+    wanted = w.keys.flatMap(k => [`${k}.py`, `${k}/__init__.py`, `src/${k}.py`, `lib/${k}.py`]);
+  } else return null;
+  const key = `${side}\0${stem}\0${wanted.join('|')}`;
+  const memo = memoOf(trees);
+  if (memo.has(key)) return memo.get(key);
+  const listed = trees.list(side);
+  let out;
+  if (listed) {
+    const all = [...listed];
+    const exact = all.filter(p => usable(p) && wanted.some(s => (t.lang === 'jvm' ? p === s || p.endsWith('/' + s) : p === s))).sort();
+    const byStem = stem ? all.filter(p => usable(p) && !exact.includes(p) && stemOfPath(p) === stem).sort().slice(0, 3) : [];
+    out = { exact, byStem };
+  } else {
+    // No listing: try where the build would look.
+    const tries = t.lang === 'jvm' ? wanted.flatMap(s => ['src/main/java/', 'src/main/kotlin/', 'src/', ''].map(r => r + s)) : wanted;
+    const exact = [];
+    let unknown = false;
+    for (const p of tries) {
+      const v = trees.read(side, p);
+      if (typeof v === 'string') exact.push(p);
+      else if (v === undefined) unknown = true;
+    }
+    out = exact.length || !unknown ? { exact, byStem: [] } : null;
   }
+  memo.set(key, out);
   return out;
 }
 
+const fitsRef = (d, ref, lang) => ref.kind !== 'call' || d.kind !== 'fn' || !OVERLOADS.has(lang) || ref.arity == null || d.arity == null || d.arity === ref.arity;
+
+// The member owner a jvm ref means (Rect for box.y() on a Ui.Rect box), or null where files own
+// their declarations (js, py).
+const ownerOf = (ref, t) => (t.lang === 'jvm' || t.lang === 'cs' ? (ref.kind === 'type' ? ref.name : ref.where?.inner ?? ref.where?.type ?? null) : null);
+
+// A record's component accessor, or its implicit constructor, in a record this change does not
+// touch: it hands back what the test put in, so the check is about whatever else it calls.
+function recordLookup(ctx, idx, t, ref) {
+  if (t.lang !== 'jvm') return undefined;
+  const types = [ownerOf(ref, t), ref.kind === 'call' && /^[A-Z]/.test(ref.name) ? ref.name : null].filter(Boolean);
+  if (!types.length) return undefined;
+  const C = declaringPaths(ctx, ref, t, 'head');
+  for (const p of C?.exact ?? []) {
+    const file = ctx.trees.file('head', p);
+    for (const type of types) {
+      const rec = file?.records?.get(type);
+      if (!rec) continue;
+      if (idx.fileEdited(p)) return undefined;
+      const neutral = { status: 'neutral', file: p, tree: true };
+      if (ref.name === type) return rec.explicitCtor ? undefined : neutral;
+      if (ref.kind === 'call' && ref.recv && (ref.arity ?? 0) === 0 && rec.components.has(ref.name) && !rec.methods.has(ref.name)) return neutral;
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+// Whether a ref the diff never declares (or declares elsewhere) is kept, gone or renamed in the
+// head tree. Undefined when anything it needs is not known.
+function headLookup(ctx, idx, t, ref) {
+  const head = declaringPaths(ctx, ref, t, 'head');
+  const base = declaringPaths(ctx, ref, t, 'base');
+  if (!head || !base) return undefined;
+  const owner = ownerOf(ref, t);
+  const name = ref.name;
+  const mine = (d) => owner == null || d.owner === owner;
+  const declares = (file) => file.decls.find(d => d.name === name && mine(d) && fitsRef(d, ref, file.lang));
+  // Kept in head.
+  for (const p of [...head.exact, ...head.byStem]) {
+    const file = ctx.trees.file('head', p);
+    if (file === undefined) return undefined;
+    if (file && declares(file)) return { status: 'kept', file: p, tree: true };
+  }
+  // Declared in base, in a file the ref points at.
+  let from = null;
+  let was = null;
+  for (const p of base.exact) {
+    const file = ctx.trees.file('base', p);
+    if (file === undefined) return undefined;
+    const d = file && declares(file);
+    if (d) { from = { p, file }; was = d; break; }
+  }
+  if (!from) return undefined;
+  // Renamed: head has exactly one new declaration of the same kind and arity in its place.
+  const renamedRec = idx.records.find(r => r.f.oldPath != null && norm(r.f.oldPath) === from.p && r.f.newPath != null);
+  const there = renamedRec ? norm(renamedRec.f.newPath) : from.p;
+  const now = ctx.trees.file('head', there);
+  if (now === undefined) return undefined;
+  if (now) {
+    const before = new Set(from.file.decls.filter(mine).map(d => d.name));
+    const fresh = now.decls.filter(d => mine(d) && d.kind === was.kind && d.arity === was.arity && !before.has(d.name));
+    if (fresh.length === 1) return { status: 'renamed', to: fresh[0].name, file: from.p, tree: true };
+    if (fresh.length > 1) return { status: 'kept', file: there, tree: true };
+  }
+  // Moved: a file of the owner type's name (or the module's) elsewhere still declares it.
+  const listed = ctx.trees.list('head');
+  if (!listed) return undefined;
+  const stem = owner != null ? ref.where.type : stemOfPath(from.p);
+  const extra = ctx.config?.tests ?? [];
+  const others = [...listed].filter(p => p !== there && SOURCE_EXT.test(p) && !isTestPath(p, extra) && !JVM_RESOURCES_PATH.test(p) && stemOfPath(p) === stem).sort().slice(0, 3);
+  for (const p of others) {
+    const file = ctx.trees.file('head', p);
+    if (file === undefined) return undefined;
+    if (file && declares(file)) return { status: 'kept', file: p, tree: true };
+  }
+  // Re-added on a + line the diff does show.
+  if (owner != null && idx.addedUnder(name, owner)) return { status: 'kept', file: null, tree: true };
+  return { status: 'gone', file: from.p, tree: true };
+}
+
+// A changed signature confirmed in head: when the declaring file still has a form the call fits,
+// the call is not reshaped at all, it is kept.
+function confirmArity(ctx, idx, ref, s) {
+  const d = idx.liveDecls(ref.name, ref.where)[0];
+  const path = d?.rec.path ?? s.file;
+  if (!path) return s;
+  const file = ctx.trees.file('head', path);
+  if (!file) return s;
+  const owner = OVERLOADS.has(file.lang) ? d?.owner ?? null : null;
+  const fits = file.decls.some(x => x.name === ref.name && x.kind === 'fn' && (owner == null || x.owner === owner) && (ref.arity == null || x.arity == null || x.arity === ref.arity));
+  return fits ? { status: 'kept', file: path, tree: true, basis: 'diff', overload: true } : { ...s, confirmed: true };
+}
+
+// Resource ids by stem, per tree: [{ path, dir, base }] for files under data/<ns>/ or assets/<ns>/.
+const RES_FILE = /(?:^|\/)((?:data|assets)\/([^/]+)\/)(?:.*\/)?([^/]+)\.(json|lang|properties|toml|ya?ml|nbt|png|ogg)$/i;
+function resourcesOf(ctx, side) {
+  const memo = memoOf(ctx.trees);
+  const key = `res\0${side}`;
+  if (memo.has(key)) return memo.get(key);
+  const listed = ctx.trees.list(side);
+  let out = null;
+  if (listed) {
+    out = new Map();
+    for (const p of listed) {
+      const m = RES_FILE.exec(p);
+      if (!m) continue;
+      const dir = p.slice(0, m.index + (m[0].startsWith('/') ? 1 : 0)) + m[1];
+      if (!out.has(m[3])) out.set(m[3], []);
+      out.get(m[3]).push({ path: p, dir, ns: m[2], base: p.split('/').pop() });
+    }
+  }
+  memo.set(key, out);
+  return out;
+}
+
+// A resource the base tree has and the head tree does not, by the listings: the base path, null
+// when it is still there, undefined when a listing is not known.
+function treeResourceGone(ctx, id) {
+  const base = resourcesOf(ctx, 'base');
+  const head = resourcesOf(ctx, 'head');
+  if (!base || !head) return undefined;
+  const m = /^(?:([a-z0-9_.-]+):)?(.+)$/.exec(id);
+  const ns = m[1] ?? null;
+  const stem = m[2].split('/').pop();
+  for (const e of base.get(stem) ?? []) {
+    if (ns && e.ns !== ns) continue;
+    if (!(head.get(stem) ?? []).some(h => h.dir === e.dir && h.base === e.base)) return e.path;
+  }
+  return null;
+}
+
+// What the trees say about one ref whose diff status is s.
+function treeStatus(ctx, idx, t, ref, s) {
+  if (ref.kind === 'resource') {
+    if (s) return s;
+    const file = treeResourceGone(ctx, ref.name);
+    return file ? { status: 'gone', file, tree: true } : s;
+  }
+  if (!s || !ref.where) return s;
+  if (s.status === 'kept') {
+    const rec = recordLookup(ctx, idx, t, ref);
+    if (rec) return rec;
+    if (s.basis === 'unseen' || s.basis === 'loose') return headLookup(ctx, idx, t, ref) ?? s;
+    return s;
+  }
+  if (s.status === 'arity' || (s.status === 'gone' && s.byArity)) return confirmArity(ctx, idx, ref, s);
+  return s;
+}
+
+// The arguments of call ref r as written on the line, or null when it cannot be found.
+function argsOf(text, r) {
+  const esc = (x) => x.replace(/[.$]/g, '\\$&');
+  const recv = r.recv.split('.').map(esc).join('\\s*\\.\\s*');
+  const m = new RegExp(`(?<![\\w$])${recv}\\s*\\.\\s*${esc(r.name)}\\s*\\(`).exec(text);
+  if (!m) return null;
+  const open = m.index + m[0].length - 1;
+  const close = closeOf(text, open);
+  return close < 0 ? null : splitTop(text.slice(open + 1, close)).map(x => x.trim());
+}
+
+// The refs on a line that the diff knows about, each with its status. When one of them would keep
+// the line a lost check, or the test is shown in part, the trees (if the source has them) get to
+// settle it: the test is read whole from base first, then each ref is looked up in head.
+export function subjectRefs(ctx, f, text) {
+  const idx = sourceIndex(ctx);
+  const read = () => refsOf(text, f).map(r => ({ r, s: refStatus(idx, r) }));
+  let refs = read();
+  const trees = ctx.trees;
+  const partial = !testContext(f).whole;
+  if (trees && refs.length && (partial || refs.some(x => blocks(x.s)))) {
+    if (!trees.available) trees.wanted++;
+    else {
+      if (partial && completeFromBase(ctx, f)) refs = read();
+      const t = testContext(f);
+      // A test shown in part whose base copy nobody has may bind a name to the wrong file, so
+      // nothing is looked up for it. PR mode fetches the copy and asks again.
+      if (!t.baseUnknown) refs = refs.map(x => ({ r: x.r, s: treeStatus(ctx, idx, t, x.r, x.s) }));
+    }
+  }
+  // A lookup keyed by a resource this change removes (Registry.get(ID) with ID's file deleted) is
+  // about the resource. A call that computes with the result (cost(get(ID))) is not keyed by it.
+  const gone = new Set();
+  for (const x of refs) if (x.r.kind === 'resource' && x.s?.status === 'gone') gone.add(x.r.via ?? `"${x.r.name}"`);
+  if (gone.size) {
+    for (const x of refs) {
+      if (x.r.kind !== 'call' || !x.r.recv || x.s?.status !== 'kept') continue;
+      const args = argsOf(text, x.r);
+      const keyed = args?.some(a => gone.has(a) || (PLAIN_STRING.test(a) && gone.has(`"${a.slice(1, -1)}"`)));
+      if (keyed) x.s = { status: 'neutral', file: x.s.file };
+    }
+  }
+  return refs.filter(x => x.s).map(x => ({ ...x.r, ...x.s }));
+}
+
+// Do the refs of one check excuse it as removed with its feature: at least one is out (gone, or
+// with `out` a shrunk signature), and every other one is out too, sits in code this change edits,
+// or is neutral (names project code that cannot be what the check is about). A neutral ref next to
+// one that is merely edited blocks like a kept one, or inlining a constant and editing the method
+// would excuse dropping the check.
+export function excusedRefs(idx, refs, out) {
+  const edited = (r) => r.status === 'kept' && r.kind !== 'type' && r.where != null && idx.touched(r.name, r.where);
+  const neutral = (r) => r.status === 'neutral';
+  return refs.some(out) && refs.every(r => out(r) || edited(r) || neutral(r)) && !(refs.some(neutral) && refs.some(edited));
+}
 
 // Lines removed together with the code they exercise: at least one ref is gone, and every other
 // ref the diff knows is gone too, or sits in code this change edits (a constant dropped from a
 // function that changed). One ref left untouched is enough to keep the lines a lost check.
 // Returns the first gone ref, for the message, or null.
 // With `shrunk`, a call to a signature that lost a parameter counts like a gone ref, and the
-// result says `reshaped` when one did.
+// result says `reshaped` when one did. `tree` says the trees, not the diff, showed it gone.
 export function removedWithFeature(ctx, f, texts, { shrunk = false } = {}) {
   const idx = sourceIndex(ctx);
   const refs = texts.flatMap(t => subjectRefs(ctx, f, t));
   const out = (r) => r.status === 'gone' || (shrunk && r.status === 'arity' && r.shrunk);
   const gone = refs.filter(out);
-  if (!gone.length) return null;
-  const edited = (r) => r.status === 'kept' && r.kind !== 'type' && r.where != null && idx.touched(r.name, r.where);
-  return refs.every(r => out(r) || edited(r)) ? { symbol: gone[0].name, file: gone[0].file, reshaped: gone.some(r => r.status === 'arity') } : null;
+  if (!gone.length || !excusedRefs(idx, refs, out)) return null;
+  return { symbol: gone[0].name, file: gone[0].file, reshaped: gone.some(r => r.status === 'arity'), tree: gone[0].tree === true };
 }
