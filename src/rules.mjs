@@ -1753,10 +1753,23 @@ export const RULES = [
       }
       return language(token) !== 'other';
     };
+    // "[attr]vendored -diff" defines a macro, and "*.java vendored" then hides java under a name
+    // HIDE_ATTR does not know. Macros may use other macros.
+    const macros = new Set();
+    const defs = ctx.files.filter(g => g.newPath != null && baseName(g.newPath) === '.gitattributes')
+      .flatMap(g => g.hunks.flatMap(h => h.lines.filter(l => l.newLine != null)))
+      .map(l => /^\s*\[attr\]([\w.-]+)\s+(.*)$/.exec(l.text)).filter(Boolean);
+    const usesMacro = (attrs) => attrs.split(/\s+/).some(x => macros.has(x));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [, name, attrs] of defs) {
+        if (!macros.has(name) && (HIDE_ATTR.test(attrs) || usesMacro(attrs))) { macros.add(name); grew = true; }
+      }
+    }
     // Patterns start with '*' here, which the shared comment check would swallow; only '#' is a comment.
     for (const { a, p } of addedLines(ctx, (p) => baseName(p) === '.gitattributes', { comments: true })) {
       if (a.text.trim().startsWith('#')) continue;
-      const hides = HIDE_ATTR.test(a.text);
+      const hides = HIDE_ATTR.test(a.text) || (!/^\s*\[attr\]/.test(a.text) && usesMacro(a.text.trim().split(/\s+/).slice(1).join(' ')));
       if (!hides && !HIDE_GENERATED.test(a.text)) continue;
       const token = a.text.trim().split(/\s+/)[0];
       if (!couldCover(token)) continue;
