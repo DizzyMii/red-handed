@@ -350,6 +350,29 @@ export function sourceIndex(ctx) {
     touched(name, where) {
       return named(name).some(d => where(d) && hunkEdits(d.rec.f.hunks[d.hunk]));
     },
+    // Every added declaration of name has a body that only returns a literal (return true;).
+    constantBody(name) {
+      const added = named(name).filter(d => d.side === '+' && d.kind === 'fn');
+      return added.length > 0 && added.every(d => {
+        const lines = d.rec.f.hunks[d.hunk]?.lines ?? [];
+        const at = lines.findIndex(l => l.kind === '+' && declarationsOn(l.text, d.rec.lang).some(x => x.name === name));
+        if (at < 0) return false;
+        const base = /^\s*/.exec(lines[at].text)[0].length;
+        const head = lines[at].text;
+        const inline = /\{(.*)\}\s*$/.exec(head);
+        const body = inline ? [inline[1]] : [];
+        if (!inline) {
+          for (let k = at + 1; k < lines.length; k++) {
+            const t = lines[k].text;
+            if (!t.trim() || isCommentLine(t)) continue;
+            if (/^\s*/.exec(t)[0].length <= base) break;
+            body.push(t);
+          }
+        }
+        const code = body.map(t => t.trim()).filter(t => t && t !== '{' && t !== '}');
+        return code.length > 0 && code.every(t => /^return\s+(?:true|false|True|False|null|None|-?\d+(?:\.\d+)?[fFdDlL]?|"[^"]*"|'[^']*')\s*;?$/.test(t));
+      });
+    },
     newlyDeclared: (name) => named(name).some(d => d.side === '+') && !named(name).some(d => d.side !== '+'),
     resourceGone: (id) => resources.get(id) ?? null,
   };

@@ -1199,6 +1199,9 @@ function pairRewrites(ctx, f, removed, added) {
 }
 
 const TRIVIAL_OPERAND = /^(-?[01](\.0+)?[fFdDlL]?|null|None|undefined|nil|""|''|true|false|True|False)$/;
+// A bound nothing can miss: x < Integer.MAX_VALUE holds for every int.
+const TYPE_LIMIT = /^(?:[A-Z][\w$]*\.)?(?:MAX_VALUE|MIN_VALUE|MAX_SAFE_INTEGER|MIN_SAFE_INTEGER|POSITIVE_INFINITY|NEGATIVE_INFINITY|EPSILON)$|^-?Infinity$|^(?:sys\.maxsize|math\.inf|float\(['"]-?inf['"]\))$/;
+const trivialOperand = (x) => TRIVIAL_OPERAND.test(x) || TYPE_LIMIT.test(x);
 // A comparison whose two sides are both something real: "x <= windowW" is, "x > 0" and "x != null" are not.
 function comparesReal(t) {
   for (const m of t.matchAll(/===|!==|==|!=|<=|>=|(?<![-=<])>(?![>=])|<(?![<=])/g)) {
@@ -1212,11 +1215,11 @@ function comparesReal(t) {
     }
     const left = t.slice(i + 1, m.index).split(/&&|\|\|/).pop().trim();
     const right = argUpToClose(t.slice(m.index + m[0].length)).split(/&&|\|\|/)[0].trim();
-    if (left && right && !TRIVIAL_OPERAND.test(left) && !TRIVIAL_OPERAND.test(right)) return true;
+    if (left && right && !trivialOperand(left) && !trivialOperand(right)) return true;
   }
   for (const m of t.matchAll(/[\w$)\]]\s*\.(?:equals|contains)\s*\(/g)) {
     const arg = argUpToClose(t.slice(m.index + m[0].length));
-    if (arg && !TRIVIAL_OPERAND.test(arg)) return true;
+    if (arg && !trivialOperand(arg)) return true;
   }
   return false;
 }
@@ -1588,7 +1591,9 @@ export const RULES = [
           for (const w of addedWeak) {
             if (wasWeak.has(w)) continue;
             const callee = changed && predicateCallee(w.text);
-            const checked = changed != null && (comparesReal(w.text) || (callee != null && sourceIndex(ctx).newlyDeclared(callee)));
+            // A new predicate whose body only returns a constant answers nothing.
+            const idx = sourceIndex(ctx);
+            const checked = changed != null && (comparesReal(w.text) || (callee != null && idx.newlyDeclared(callee) && !idx.constantBody(callee)));
             add(pathOf(f), w.newLine, removedStrong[0].text, w.text, checked
               ? `A precise assertion was replaced by a looser one in the same change that removed or renamed ${changed.name} in ${changed.file}. Flagged for review instead of failing, because the new check still compares against something real.`
               : undefined, checked);
