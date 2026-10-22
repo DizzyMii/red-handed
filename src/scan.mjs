@@ -8,8 +8,10 @@ import { parseDiff } from './diff.mjs';
 import { isTestPath, isCommentLine, ASSERT } from './classify.mjs';
 import { matchesAny } from './glob.mjs';
 import { RULES } from './rules.mjs';
+import { treeAccess } from './trees.mjs';
 
 const CONFIG_FILE = '.red-handed.json';
+export const DIFF_ALONE_NOTE = 'judged on the diff alone: no copy of the files around the diff was available, so code the diff does not show was taken to still be there';
 const DEFAULT_SKIP_DIRS = /(^|\/)(node_modules|vendor|dist|build)\//;
 
 const strings = (v) => (Array.isArray(v) ? v.filter(x => typeof x === 'string') : []);
@@ -161,9 +163,13 @@ export function scan(source, config) {
   for (const f of files) for (const a of f.added) allAddedTrimmed.add(clipTrim(a.text));
 
   const ctx = { files, config: cfg, source, isTest, allAddedTrimmed, truncated };
+  ctx.trees = treeAccess(ctx);
 
   let raw = [];
   for (const rule of RULES) raw = raw.concat(rule.check(ctx));
+  // Only a rule that wanted code the diff does not show says so.
+  if (!ctx.trees.available && ctx.trees.wanted) notes.push(DIFF_ALONE_NOTE);
+  if (ctx.trees.capped) notes.push(`stopped reading the base and head files at the cap of ${ctx.trees.cap ?? 'files'} per side; checks that needed more were judged on the diff alone`);
 
   let allowed = 0;
   const kept = [];
@@ -211,4 +217,26 @@ export function scan(source, config) {
     notes,
     findings: kept,
   };
+}
+
+// What a scan of source would read from its trees and could not: the paths each side answered
+// unknown (undefined) for, and whether a listing was wanted. The scan itself is thrown away. A path
+// a known listing says is absent is left out. PR mode fetches what this returns and asks again.
+export function planReads(source, config) {
+  const want = { base: new Set(), head: new Set(), lists: { base: false, head: false } };
+  const recording = (side) => {
+    const inner = source.trees?.[side];
+    return {
+      capped: false,
+      list() { const l = inner?.list() ?? null; if (l == null) want.lists[side] = true; return l; },
+      read(p) { const t = inner ? inner.read(p) : undefined; if (t === undefined) want[side].add(p); return t; },
+    };
+  };
+  scan({ ...source, trees: { base: recording('base'), head: recording('head') } }, config);
+  const left = (side) => {
+    const l = source.trees?.[side]?.list() ?? null;
+    const listed = l ? new Set(l) : null;
+    return [...want[side]].filter(p => !listed || listed.has(p)).sort();
+  };
+  return { base: left('base'), head: left('head'), lists: want.lists };
 }
