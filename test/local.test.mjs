@@ -247,3 +247,40 @@ test('a test file moved with plain mv into src is still test-deleted', () => {
   assert.equal(r.status, 1);
   assert.ok(JSON.parse(r.stdout).findings.some(f => f.rule === 'test-deleted' && f.file === 'test/a.test.js'));
 });
+
+test('sitting on the base branch with nothing uncommitted says how to scan the last commit', () => {
+  const dir = repo();
+  write(dir, 'test/a.test.js', TEST_FILE.replace("test('adds'", "test.skip('adds'"));
+  sh(dir, 'commit', '-q', '-am', 'skip it');
+  const res = JSON.parse(rh(dir, '--json').stdout);
+  assert.ok(res.notes.some(n => n.includes('--base HEAD~1') && n.includes('main')), res.notes.join('|'));
+  assert.ok(res.notes.includes('no changes to scan'));
+  // Passing a base is the answer, and it catches the skip.
+  assert.equal(JSON.parse(rh(dir, '--json', '--base', 'HEAD~1').stdout).verdict, 'CAUGHT');
+  assert.ok(!JSON.parse(rh(dir, '--json', '--base', 'HEAD~1').stdout).notes.some(n => n.includes('--base HEAD~1')));
+});
+
+test('an unknown base that looks like a sha mentions shallow checkouts', () => {
+  const dir = repo();
+  const r = rh(dir, '--base', '1234567890abcdef1234567890abcdef12345678');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /unknown base ref/);
+  assert.match(r.stderr, /fetch-depth: 0/);
+  const named = rh(dir, '--base', 'nosuchbranch');
+  assert.doesNotMatch(named.stderr, /fetch-depth/);
+});
+
+test('input that is not a unified diff exits 2, an empty one stays CLEAN', () => {
+  const dir = repo();
+  const txt = path.join(dir, 'notes.txt');
+  fs.writeFileSync(txt, 'garbage text\n');
+  const file = rh(dir, txt);
+  assert.equal(file.status, 2);
+  assert.match(file.stderr, /input is not a unified diff/);
+  const piped = spawnSync(process.execPath, [bin, '-'], { cwd: dir, input: 'garbage text\n', encoding: 'utf8' });
+  assert.equal(piped.status, 2);
+  assert.match(piped.stderr, /input is not a unified diff/);
+  const empty = spawnSync(process.execPath, [bin, '-'], { cwd: dir, input: '', encoding: 'utf8' });
+  assert.equal(empty.status, 0);
+  assert.match(empty.stdout, /no changes to scan/);
+});

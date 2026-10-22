@@ -115,6 +115,7 @@ export function rulesList(rules, { color = false } = {}) {
 export function wantColor(io, noColor = false) {
   if (noColor) return false;
   const force = io.env?.FORCE_COLOR;
-  if (force && force !== '0') return true;
+  if (force === '0' || force === 'false') return false;
+  if (force) return true;
   return Boolean(io.stdout.isTTY) && !io.env?.NO_COLOR;
 }

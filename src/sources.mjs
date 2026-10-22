@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseDiff } from './diff.mjs';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const BASE_CANDIDATES = ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master'];
@@ -64,7 +65,10 @@ export function localSource(cwd, base) {
     label = `${here} (no commits yet)`;
   } else {
     if (base) {
-      if (!resolves(root, base)) throw new Error(`unknown base ref "${base}"`);
+      if (!resolves(root, base)) {
+        const hint = /^[0-9a-f]{7,40}$/i.test(base) ? ' (is the checkout shallow? use actions/checkout with fetch-depth: 0)' : '';
+        throw new Error(`unknown base ref "${base}"${hint}`);
+      }
       baseRef = base;
     } else {
       baseRef = BASE_CANDIDATES.find(r => resolves(root, r)) ?? null;
@@ -85,6 +89,10 @@ export function localSource(cwd, base) {
 
   const { untracked, skipped } = readUntracked(root);
   const notes = skipped ? [`skipped ${skipped} large or binary untracked files`] : [];
+  // On main with the work already committed there is nothing to compare, which looks like a clean bill.
+  if (!base && baseRef && baseSha && !diffText.trim() && !untracked.length && baseSha === git(root, ['rev-parse', 'HEAD']).out.trim()) {
+    notes.push(`HEAD is ${baseRef}, so only uncommitted changes were scanned; pass --base HEAD~1 to scan your last commit`);
+  }
 
   return {
     kind: 'local',
@@ -107,6 +115,12 @@ export function localSource(cwd, base) {
 
 const plain = { base: null, url: null, title: null, author: null, authorIsBot: null, untracked: [], notes: [], baseFile: () => null };
 
+// Empty input is an empty diff. Text that is not a diff at all would otherwise scan as CLEAN.
+function requireDiff(text) {
+  if (text.trim() && parseDiff(text).files.length === 0) throw new Error('input is not a unified diff');
+  return text;
+}
+
 export function fileSource(file) {
   let diffText;
   try {
@@ -114,14 +128,14 @@ export function fileSource(file) {
   } catch (e) {
     throw new Error(`could not read ${file}: ${e.message}`);
   }
-  return { kind: 'file', label: file, ...plain, diffText };
+  return { kind: 'file', label: file, ...plain, diffText: requireDiff(diffText) };
 }
 
 export async function stdinSource(stream) {
   if (!stream || stream.isTTY) throw new Error('nothing on stdin');
   const chunks = [];
   for await (const c of stream) chunks.push(typeof c === 'string' ? Buffer.from(c) : c);
-  return { kind: 'stdin', label: 'stdin', ...plain, diffText: Buffer.concat(chunks).toString('utf8') };
+  return { kind: 'stdin', label: 'stdin', ...plain, diffText: requireDiff(Buffer.concat(chunks).toString('utf8')) };
 }
 
 const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/;

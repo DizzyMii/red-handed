@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { terminal, markdown, json } from '../src/report.mjs';
+import { terminal, markdown, json, wantColor } from '../src/report.mjs';
 import { mkDiff, run } from './helpers.mjs';
 
 const caught = () => run([
@@ -98,4 +98,13 @@ test('terminal says file in the singular for one file', () => {
   const text = terminal(clean(), {});
   assert.match(text, /1 file, 0 test files, assertions \+0 -0/);
   assert.match(terminal(caught(), {}), /1 file, 1 test file, assertions/);
+});
+
+test('wantColor: FORCE_COLOR=0 or false turns color off even on a terminal', () => {
+  const tty = (env) => ({ stdout: { isTTY: true }, env });
+  assert.equal(wantColor(tty({ FORCE_COLOR: '0' })), false);
+  assert.equal(wantColor(tty({ FORCE_COLOR: 'false' })), false);
+  assert.equal(wantColor(tty({ FORCE_COLOR: '1' })), true);
+  assert.equal(wantColor(tty({})), true);
+  assert.equal(wantColor({ stdout: { isTTY: false }, env: { FORCE_COLOR: '1' } }), true);
 });
