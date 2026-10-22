@@ -242,6 +242,7 @@ export function sourceIndex(ctx) {
   const decls = [];
   const byName = new Map();
   const records = [];
+  const hunkDecls = new Map();
   for (const f of ctx.files) {
     const isSrc = (p) => p != null && isSourcePath(p, extra);
     if (!isSrc(f.oldPath) && !isSrc(f.newPath)) continue;
@@ -251,17 +252,37 @@ export function sourceIndex(ctx) {
     records.push(rec);
     let owner = stemOfPath(path);
     f.hunks.forEach((h, hunk) => {
+      const inHunk = [];
+      hunkDecls.set(h, inHunk);
       for (const l of h.lines) {
         for (const d of declarationsOn(l.text, lang)) {
           if (d.kind === 'type' && OVERLOADS.has(lang)) owner = d.name;
           const decl = { ...d, side: l.kind, hunk, rec, top: !/^\s/.test(l.text), owner: OVERLOADS.has(lang) ? (d.kind === 'type' ? d.name : owner) : rec.mod };
           decls.push(decl);
+          inHunk.push(decl);
           if (!byName.has(decl.name)) byName.set(decl.name, []);
           byName.get(decl.name).push(decl);
         }
       }
     });
   }
+  // Does a hunk change code: a line on one side whose text is not on the other. A comment or
+  // whitespace edit is not a change.
+  const edits = new Map();
+  const hunkEdits = (h) => {
+    if (!h) return false;
+    if (edits.has(h)) return edits.get(h);
+    const side = (k) => new Set(h.lines.filter(l => l.kind === k).map(l => l.text.trim()));
+    const minus = side('-');
+    const plus = side('+');
+    const out = h.lines.some(l => {
+      const t = l.text.trim();
+      if (l.kind === ' ' || !t || isCommentLine(t)) return false;
+      return !(l.kind === '-' ? plus : minus).has(t);
+    });
+    edits.set(h, out);
+    return out;
+  };
   const named = (name) => byName.get(name) ?? [];
   const fitsArity = (d, arity) => arity == null || d.arity == null || !OVERLOADS.has(d.rec.lang) || d.arity === arity;
   const plusNames = new Set(decls.filter(d => d.side === '+').map(d => d.name));
@@ -298,7 +319,7 @@ export function sourceIndex(ctx) {
     renamed(name, where) {
       for (const d of named(name)) {
         if (d.side !== '-' || !where(d)) continue;
-        const inHunk = decls.filter(x => x.rec === d.rec && x.hunk === d.hunk);
+        const inHunk = hunkDecls.get(d.rec.f.hunks[d.hunk]) ?? [];
         if (inHunk.filter(x => x.side === '-' && x.name === name).length !== 1) continue;
         const to = inHunk.filter(x => x.side === '+' && x.name !== name && x.kind === d.kind && x.arity === d.arity && !minusNames.has(x.name));
         if (to.length === 1) return to[0].name;
@@ -315,18 +336,7 @@ export function sourceIndex(ctx) {
     },
     // A hunk that shows the declaration also changes code. A comment or whitespace edit is not a touch.
     touched(name, where) {
-      return named(name).some(d => {
-        if (!where(d)) return false;
-        const lines = d.rec.f.hunks[d.hunk]?.lines ?? [];
-        const side = (k) => new Set(lines.filter(l => l.kind === k).map(l => l.text.trim()));
-        const minus = side('-');
-        const plus = side('+');
-        return lines.some(l => {
-          const t = l.text.trim();
-          if (l.kind === ' ' || !t || isCommentLine(t)) return false;
-          return !(l.kind === '-' ? plus : minus).has(t);
-        });
-      });
+      return named(name).some(d => where(d) && hunkEdits(d.rec.f.hunks[d.hunk]));
     },
     newlyDeclared: (name) => named(name).some(d => d.side === '+') && !named(name).some(d => d.side !== '+'),
     resourceGone: (id) => resources.get(id) ?? null,

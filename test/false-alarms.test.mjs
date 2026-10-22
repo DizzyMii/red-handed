@@ -767,3 +767,27 @@ test('cheat_fp1_py_unrelated_namesake_deleted: scripts/legacy/cart.py is not the
   ]);
   assert.ok(allHard(hits(r, 'test-deleted')), show(r));
 });
+
+test('speed_fp2_big_rewrite: 3000 rewritten checks against 200 edited methods pair in under 2 s', () => {
+  const svcRem = [];
+  const svcAdd = [];
+  for (let k = 0; k < 200; k++) {
+    svcRem.push(`  static int calc${k}(int i) {`, `    return i + ${k};`, '  }');
+    svcAdd.push(`  static int calc${k}(int i) {`, `    return i * ${k};`, '  }');
+  }
+  const rem = [];
+  const add = [];
+  for (let i = 0; i < 3000; i++) {
+    rem.push(`    assertEquals(${i}, Svc.calc${i % 200}(${i}));`);
+    add.push(`    assertEquals(${i + 1}, Svc.calc${i % 200}(${i}));`);
+  }
+  const t0 = Date.now();
+  const r = run([
+    mkDiff('src/main/java/demo/Svc.java', svcRem, svcAdd, { before: ['package demo;', 'public final class Svc {'], after: ['}'] }),
+    mkDiff('src/test/java/demo/SvcTest.java', rem, add, { before: ['package demo;', 'class SvcTest {', '  @Test', '  void all() {'], after: ['  }', '}'] }),
+  ]);
+  const took = Date.now() - t0;
+  assert.ok(took < 2000, `took ${took} ms`);
+  assert.ok(onlySoft(hits(r, 'assertion-removed')), 'every rewrite still pairs');
+});
+

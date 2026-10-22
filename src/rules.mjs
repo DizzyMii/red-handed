@@ -1120,45 +1120,79 @@ function dropArgs(t, name) {
 // The ref that makes removed line x and added line y one check rewritten: equal once the calls
 // whose arity changed lose their arguments and renamed names take the new name, or equal up to
 // the expected value when the change edits code the line calls (not when `exact`). Null when there is none.
-function rewriteRef(idx, refs, x, y, exact) {
-  let why = null;
-  for (const q of refs) {
-    if (q.status === 'arity') { x = dropArgs(x, q.name); y = dropArgs(y, q.name); why ??= q; }
-    if (q.status === 'renamed') { x = x.replace(new RegExp(`(?<![\\w$])${escapeName(q.name)}(?![\\w$])`, 'g'), q.to); why ??= q; }
-  }
-  if (why && x === y) return why;
-  if (exact) return null;
+// Worked out once per removed line, before any candidate is looked at: `tx` applies the arity and
+// rename normalisations (null when there are none), `why` is the ref behind them, and `changed` is
+// the ref whose code this change edits, which allows a match up to the expected value.
+function rewriteBasis(idx, refs) {
+  const why = refs.find(q => q.status === 'arity' || q.status === 'renamed') ?? null;
   const changed = refs.find(q => q.status === 'renamed' || q.status === 'arity'
-    || (q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where)));
-  return changed && flattenCheck(x) === flattenCheck(y) ? changed : null;
+    || (q.status === 'kept' && q.kind !== 'type' && q.where != null && idx.touched(q.name, q.where))) ?? null;
+  // Arity drops apply to both lines; a rename only to the removed one, which still has the old name.
+  const ops = refs.map(q => (q.status === 'arity' ? { name: q.name }
+    : q.status === 'renamed' ? { re: new RegExp(`(?<![\\w$])${escapeName(q.name)}(?![\\w$])`, 'g'), to: q.to } : null)).filter(Boolean);
+  const tx = why && ((t, removedSide) => {
+    for (const op of ops) {
+      if (op.name) t = dropArgs(t, op.name);
+      else if (removedSide) t = t.replace(op.re, op.to);
+    }
+    return t;
+  });
+  return { tx, why, changed };
 }
 
 // Pairs removed with added assertions of one file, one to one, nearest line first. `same` are
 // pairs that differ only in the failure message: the check itself is unchanged, so neither side
-// is a finding. `pairs` are rewrites, reported SOFT.
+// is a finding. `pairs` are rewrites, reported SOFT. Added lines are bucketed by key, so a big
+// rewrite looks at a handful of candidates per removed line, not at all of them.
 function pairRewrites(ctx, f, removed, added) {
   const junit = testContext(f);
-  const msgless = (t) => collapse(dropMessage(t, junit));
+  const memo = new Map();
+  const msgless = (t) => { let v = memo.get(t); if (v === undefined) { v = collapse(dropMessage(t, junit)); memo.set(t, v); } return v; };
   const free = new Set(added);
-  const nearest = (r) => [...free].sort((x, y) => Math.abs(x.line - r.line) - Math.abs(y.line - r.line));
+  const order = new Map(added.map((a, k) => [a, k]));
+  const byDistance = (r, list) => list.filter(x => free.has(x))
+    .sort((x, y) => Math.abs(x.line - r.line) - Math.abs(y.line - r.line) || order.get(x) - order.get(y));
+  const bucket = (key) => {
+    const m = new Map();
+    for (const a of added) { const k = key(a); if (!m.has(k)) m.set(k, []); m.get(k).push(a); }
+    return m;
+  };
+  const exactKeys = bucket(a => msgless(a.text));
   const same = new Map();
   for (const r of removed) {
-    const a = nearest(r).find(x => msgless(x.text) === msgless(r.text));
+    const a = byDistance(r, exactKeys.get(msgless(r.text)) ?? [])[0];
     if (a) { free.delete(a); same.set(r, a); }
   }
   const idx = sourceIndex(ctx);
+  const flatKeys = bucket(a => flattenCheck(msgless(a.text)));
+  const basis = new Map();
   const pairs = new Map();
   // Exact rewrites first, so a check that only matches up to its expected value cannot take the
   // partner of one that matches outright.
   for (const exact of [true, false]) {
     for (const r of removed) {
       if (same.has(r) || pairs.has(r)) continue;
-      const refs = subjectRefs(ctx, f, r.text);
-      if (!refs.length) continue;
-      for (const a of nearest(r)) {
-        const ref = rewriteRef(idx, refs, msgless(r.text), msgless(a.text), exact);
-        if (ref) { free.delete(a); pairs.set(r, { a, ref }); break; }
+      if (!basis.has(r)) {
+        const refs = subjectRefs(ctx, f, r.text);
+        basis.set(r, refs.length ? rewriteBasis(idx, refs) : null);
       }
+      const b = basis.get(r);
+      if (!b || (exact && !b.tx) || (!exact && !b.changed)) continue;
+      const x = msgless(r.text);
+      let hit = null;
+      if (!b.tx) {
+        // No normalisation: only a match up to the expected value is left, so look in its bucket.
+        const a = byDistance(r, flatKeys.get(flattenCheck(x)) ?? [])[0];
+        if (a) hit = { a, ref: b.changed };
+      } else {
+        const xs = b.tx(x, true);
+        for (const a of byDistance(r, added)) {
+          const ys = b.tx(msgless(a.text), false);
+          if (xs === ys) { hit = { a, ref: b.why }; break; }
+          if (!exact && flattenCheck(xs) === flattenCheck(ys)) { hit = { a, ref: b.changed }; break; }
+        }
+      }
+      if (hit) { free.delete(hit.a); pairs.set(r, hit); }
     }
   }
   return { same, pairs, addedLeft: [...free] };
