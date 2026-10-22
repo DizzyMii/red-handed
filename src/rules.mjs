@@ -5,6 +5,7 @@ import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
 import { splitTop, normalised } from './symbols.mjs';
+import { MAX_DIFF_LINES } from './diff.mjs';
 
 export function clip(s) {
   if (s == null) return null;
@@ -953,12 +954,14 @@ const CYPRESS_FAIL_SWALLOW = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:
 const CYPRESS_FAIL_OPEN = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:\([^)]*\)|\w+)\s*=>\s*\{\s*$/;
 const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
+const TEST_DELETED_WHY = 'A test file was deleted, so whatever it checked is no longer checked.';
+
 // ---- the rules, in spec order ---------------------------------------------------------------
 
 export const RULES = [
   defineRule({
     id: 'test-deleted', tier: 'HARD', title: 'Test file deleted',
-    why: 'A test file was deleted, so whatever it checked is no longer checked.',
+    why: TEST_DELETED_WHY,
   }, (ctx, add) => {
     // Sources deleted in this same change (a moved implementation is "renamed", so it is not here).
     const goneSources = ctx.files.filter(g => g.status === 'deleted' && g.oldPath != null && !ctx.isTest(g.oldPath)).map(g => g.oldPath);
@@ -992,7 +995,13 @@ export const RULES = [
       const softer = language(f.oldPath) === 'other'
         || (f.status === 'deleted' && !f.binary && !f.removed.some(testy))
         || (f.status === 'deleted' && testsDeletedSource(f));
-      add(f.oldPath, 0, f.oldPath, null, undefined, softer);
+      // A move whose new copy sits past the cut looks like a delete. Padding a diff is easy, so it stays hard.
+      const cut = ctx.truncated && f.status === 'deleted'
+        && !ctx.files.some(g => g.newPath != null && g !== f && baseName(g.newPath) === baseName(f.oldPath));
+      const message = cut
+        ? `${TEST_DELETED_WHY} The diff was cut off at ${MAX_DIFF_LINES} lines, so if this file was moved, its new copy may be past the cut. Scan a smaller range to check.`
+        : undefined;
+      add(f.oldPath, 0, f.oldPath, null, message, softer);
     }
   }),
 

@@ -56,8 +56,56 @@ function untrackedRecord({ path, text }) {
   };
 }
 
+// Folds deleted record d and added record u into one renamed record, keeping only what changed,
+// as git shows a rename with edits.
+function fold(records, d, u) {
+  const left = new Map();
+  for (const a of u.added) { const t = a.text.trim(); left.set(t, (left.get(t) ?? 0) + 1); }
+  const kept = new Map();
+  const removed = d.removed.filter(r => {
+    const t = r.text.trim();
+    if ((left.get(t) ?? 0) === 0) return true;
+    left.set(t, left.get(t) - 1);
+    kept.set(t, (kept.get(t) ?? 0) + 1);
+    return false;
+  });
+  const added = u.added.filter(a => {
+    const t = a.text.trim();
+    if ((kept.get(t) ?? 0) === 0) return true;
+    kept.set(t, kept.get(t) - 1);
+    return false;
+  });
+  const lines = [
+    ...removed.map(r => ({ kind: '-', text: r.text, oldLine: r.line, newLine: null })),
+    ...added.map(a => ({ kind: '+', text: a.text, oldLine: null, newLine: a.line })),
+  ];
+  d.newPath = u.newPath;
+  d.status = 'renamed';
+  d.removed = removed.map(r => ({ ...r, hunk: 0 }));
+  d.added = added.map(a => ({ ...a, hunk: 0 }));
+  d.hunks = lines.length ? [{ oldStart: 1, newStart: 1, lines }] : [];
+  records.splice(records.indexOf(u), 1);
+}
+
+const isNewFile = (u) => u.status === 'added' && u.oldPath === null && u.hunks.length === 1;
+const fileName = (p) => String(p).split('/').pop();
+// Braces, blank lines and one-word lines are in every file, so they say nothing about a move.
+const telling = (t) => t.replace(/\s+/g, '').length >= 3 && /\w/.test(t);
+
+function shared(oldLines, u, keep) {
+  const pool = new Map();
+  for (const a of u.added) { const t = a.text.trim(); if (keep(t)) pool.set(t, (pool.get(t) ?? 0) + 1); }
+  let n = 0;
+  for (const t of oldLines) {
+    if ((pool.get(t) ?? 0) > 0) { n++; pool.set(t, pool.get(t) - 1); }
+  }
+  return n;
+}
+
 // git only pairs renames among tracked paths, so a file moved with plain mv shows up as a deletion
 // plus an untracked file. Fold each such pair back into one renamed record when most lines survive.
+// A second pass takes a file of the same name that kept most of the old lines but grew past
+// twice their size, which git (and the first pass) read as a delete and an add.
 function pairMoves(records) {
   const gone = records.filter(r => r.status === 'deleted' && r.removed.length);
   for (const d of gone) {
@@ -66,44 +114,24 @@ function pairMoves(records) {
     let best = null;
     let bestScore = 0;
     for (const u of records) {
-      if (u.status !== 'added' || u.oldPath !== null || u.hunks.length !== 1) continue;
-      const pool = new Map();
-      for (const a of u.added) { const t = a.text.trim(); if (t) pool.set(t, (pool.get(t) ?? 0) + 1); }
-      let shared = 0;
-      for (const t of oldLines) {
-        if ((pool.get(t) ?? 0) > 0) { shared++; pool.set(t, pool.get(t) - 1); }
-      }
-      const score = shared / Math.max(oldLines.length, u.added.filter(a => a.text.trim()).length);
+      if (!isNewFile(u)) continue;
+      const score = shared(oldLines, u, Boolean) / Math.max(oldLines.length, u.added.filter(a => a.text.trim()).length);
       if (score >= 0.5 && score > bestScore) { best = u; bestScore = score; }
     }
-    if (!best) continue;
-    // Keep only what changed, as git shows a rename with edits.
-    const left = new Map();
-    for (const a of best.added) { const t = a.text.trim(); left.set(t, (left.get(t) ?? 0) + 1); }
-    const kept = new Map();
-    const removed = d.removed.filter(r => {
-      const t = r.text.trim();
-      if ((left.get(t) ?? 0) === 0) return true;
-      left.set(t, left.get(t) - 1);
-      kept.set(t, (kept.get(t) ?? 0) + 1);
-      return false;
-    });
-    const added = best.added.filter(a => {
-      const t = a.text.trim();
-      if ((kept.get(t) ?? 0) === 0) return true;
-      kept.set(t, kept.get(t) - 1);
-      return false;
-    });
-    const lines = [
-      ...removed.map(r => ({ kind: '-', text: r.text, oldLine: r.line, newLine: null })),
-      ...added.map(a => ({ kind: '+', text: a.text, oldLine: null, newLine: a.line })),
-    ];
-    d.newPath = best.newPath;
-    d.status = 'renamed';
-    d.removed = removed.map(r => ({ ...r, hunk: 0 }));
-    d.added = added.map(a => ({ ...a, hunk: 0 }));
-    d.hunks = lines.length ? [{ oldStart: 1, newStart: 1, lines }] : [];
-    records.splice(records.indexOf(best), 1);
+    if (best) fold(records, d, best);
+  }
+  for (const d of gone) {
+    if (d.status !== 'deleted') continue;
+    const oldLines = d.removed.map(r => r.text.trim()).filter(telling);
+    if (!oldLines.length) continue;
+    let best = null;
+    let bestScore = 0;
+    for (const u of records) {
+      if (!isNewFile(u) || fileName(u.newPath) !== fileName(d.oldPath)) continue;
+      const score = shared(oldLines, u, telling) / oldLines.length;
+      if (score >= 0.6 && score > bestScore) { best = u; bestScore = score; }
+    }
+    if (best) fold(records, d, best);
   }
 }
 
