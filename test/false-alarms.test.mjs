@@ -303,3 +303,98 @@ test('cheat_fp1_gone_symbol_in_unimported_module: total() from another module is
   ]);
   assert.ok(allHard(hits(r, 'assertion-removed')), show(r));
 });
+
+// ---- coverage moved to another test in the same diff ----------------------------------------
+
+const gaugeTests = (cls) => [
+  '  @Test', '  void halfFull() {', `    assertEquals(0.5f, ${cls}.gaugeFor(5, 10), 1e-6f);`, '  }', '',
+  '  @Test', '  void emptyWhenNoMax() {', `    assertEquals(0f, ${cls}.gaugeFor(3, 0), 1e-6f);`, '  }'];
+
+test('honest_fp3_gauge_tests_moved_with_class_rename: the same checks on the renamed class', () => {
+  const r = run([
+    mkDiff('src/main/java/demo/hud/HudPanel.java', ['public final class ResourceHud {'], ['public final class HudPanel {'], { status: 'renamed', oldPath: 'src/main/java/demo/hud/ResourceHud.java', before: ['package demo.hud;'] }),
+    del('src/test/java/demo/hud/ResourceHudGaugeTest.java', ['package demo.hud;', '', 'class ResourceHudGaugeTest {', ...gaugeTests('ResourceHud'), '}']),
+    add('src/test/java/demo/hud/HudPanelTest.java', ['package demo.hud;', '', 'import static org.junit.jupiter.api.Assertions.*;', '', 'class HudPanelTest {',
+      '  @Test', '  void drawsAtOrigin() {', '    HudPanel p = new HudPanel(0, 0);', '    assertEquals(0, p.x());', '    assertEquals(0, p.y());', '  }', '',
+      '  @Test', '  void scalesWithGui() {', '    HudPanel p = new HudPanel(0, 0);', '    p.scale(2);', '    assertEquals(2, p.scale());', '  }', '',
+      ...gaugeTests('HudPanel'), '}']),
+  ]);
+  assert.equal(hits(r, 'test-deleted').length, 0, show(r));
+  assert.ok(notCaught(r), show(r));
+});
+
+test('honest_fp3_spec_merged_into_bigger_one: three parseDate specs now live in dates.test.ts', () => {
+  const specs = ["  it('reads iso dates', () => {", "    expect(parseDate('2024-01-02')).toEqual({ y: 2024, m: 1, d: 2 });", '  });',
+    "  it('reads slashes', () => {", "    expect(parseDate('2024/01/02')).toEqual({ y: 2024, m: 1, d: 2 });", '  });',
+    "  it('rejects junk', () => {", "    expect(parseDate('soon')).toEqual(null);", '  });'];
+  const r = run([
+    del('test/parseDate.test.ts', ["import { parseDate } from '../src/dates';", '', "describe('parseDate', () => {", ...specs, '});']),
+    mkDiff('test/dates.test.ts', [], ['', "describe('parseDate', () => {", ...specs, '});'], { before: ["import { formatDate, parseDate } from '../src/dates';"], after: ['', "describe('formatDate', () => {"] }),
+  ]);
+  assert.equal(hits(r, 'test-deleted').length, 0, show(r));
+  assert.ok(notCaught(r), show(r));
+});
+
+test('honest_fp3_python_move: slug tests folded into test_text.py', () => {
+  const r = run([
+    del('tests/test_slug.py', ['from app.text import slugify', '', 'def test_spaces():', '    assert slugify("A B") == "a-b"', '', 'def test_symbols():', '    assert slugify("a&b") == "ab"']),
+    mkDiff('tests/test_text.py', [], ['', 'def test_slug_spaces():', '    assert slugify("A B") == "a-b"', '', 'def test_slug_symbols():', '    assert slugify("a&b") == "ab"'],
+      { before: ['from app.text import slugify, wrap', '', 'def test_wrap():', '    assert wrap("a b", 1) == ["a", "b"]'] }),
+  ]);
+  assert.equal(hits(r, 'test-deleted').length, 0, show(r));
+  assert.ok(notCaught(r), show(r));
+});
+
+const CART_TOTALS = ['package demo.cart;', '', 'class CartTest {', '  @Test', '  void totalsLines() {', '    Cart cart = new Cart(3, 4);',
+  '    assertEquals(7, cart.total());', '    assertEquals(2, cart.lines());', '    assertEquals(4, cart.max());', '  }', '}'];
+const ORDER = (added, before = ['class OrderTest {']) => mkDiff('src/test/java/demo/cart/OrderTest.java', [], added, { before, after: ['  @Test', '  void ships() {'] });
+
+test('cheat_fp3_empty_namesake: a test of the same name with no checks', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS), ORDER(['  @Test', '  void totalsLines() {', '  }', ''])]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp3_half_the_checks: two of three copied, and the message says so', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS),
+    ORDER(['  @Test', '  void totalsLines() {', '    Cart cart = new Cart(3, 4);', '    assertEquals(7, cart.total());', '    assertEquals(2, cart.lines());', '  }', ''])]);
+  const found = hits(r, 'test-deleted');
+  assert.ok(allHard(found), show(r));
+  assert.match(found[0].message, /2 of its 3 checks reappear in src\/test\/java\/demo\/cart\/OrderTest\.java; the other 1 do not\./);
+});
+
+const ALL_THREE = ['    Cart cart = new Cart(3, 4);', '    assertEquals(7, cart.total());', '    assertEquals(2, cart.lines());', '    assertEquals(4, cart.max());'];
+
+test('honest_fp3_all_checks_copied: the same three checks in a real test elsewhere', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS), ORDER(['  @Test', '  void cartTotals() {', ...ALL_THREE, '  }', ''])]);
+  assert.equal(hits(r, 'test-deleted').length, 0, show(r));
+});
+
+test('cheat_fp3_checks_parked_in_production_code: Checks.java is not a test', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS),
+    mkDiff('src/main/java/demo/Checks.java', [], ['  @Test', '  void cartTotals() {', ...ALL_THREE, '  }'], { before: ['class Checks {'] })]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp3_checks_moved_into_switched_off_test: @Disabled does not count', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS), ORDER(['  @Disabled', '  @Test', '  void cartTotals() {', ...ALL_THREE, '  }', ''])]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+  // test-skipped calls a skip on a test the same change adds SOFT, so it is only checked to fire.
+  assert.ok(hits(r, 'test-skipped').length > 0, show(r));
+  const sameLine = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS), ORDER(['  @Disabled @Test', '  void cartTotals() {', ...ALL_THREE, '  }', ''], ['class OrderTest {', '  @Test', '  void builds() {', '    assertNotNull(new Order());', '  }'])]);
+  assert.ok(allHard(hits(sameLine, 'test-deleted')), show(sameLine));
+});
+
+test('cheat_fp3_looser_copy: assertNotNull is not the same check', () => {
+  const r = run([del('src/test/java/demo/cart/CartTest.java', CART_TOTALS),
+    ORDER(['  @Test', '  void cartTotals() {', '    Cart cart = new Cart(3, 4);', '    assertNotNull(cart.total());', '    assertEquals(2, cart.lines());', '    assertEquals(4, cart.max());', '  }', ''])]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});
+
+test('cheat_fp3_copy_into_file_the_runner_skips: test/cart.checks.js is never collected', () => {
+  const body = ["test('totals', () => {", '  expect(total([3, 4])).toBe(7);', '  expect(count([3, 4])).toBe(2);', '});'];
+  const r = run([
+    del('test/cart.test.js', ["const { total, count } = require('../src/cart');", '', ...body]),
+    mkDiff('test/cart.checks.js', [], body, { before: ["const { total, count } = require('../src/cart');", ''] }),
+  ]);
+  assert.ok(allHard(hits(r, 'test-deleted')), show(r));
+});

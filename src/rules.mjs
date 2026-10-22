@@ -4,7 +4,7 @@
 import {
   isSourcePath, isSnapshotPath, isCiPath, isBuildPath, language, ASSERT, isCommentLine,
 } from './classify.mjs';
-import { splitTop, normalised, sourceIndex, testContext, modKey, removedWithFeature } from './symbols.mjs';
+import { splitTop, moveKey, sourceIndex, testContext, modKey, removedWithFeature } from './symbols.mjs';
 import { MAX_DIFF_LINES } from './diff.mjs';
 
 export function clip(s) {
@@ -966,6 +966,70 @@ const CYPRESS_FAIL_SWALLOW = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:
 const CYPRESS_FAIL_OPEN = /\b(?:cy|Cypress)\.on\s*\(\s*['"]fail['"]\s*,\s*(?:\([^)]*\)|\w+)\s*=>\s*\{\s*$/;
 const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
 
+// Does the runner collect this file by its name? Only those count as a new home for moved checks.
+function runnerCollects(p) {
+  const lang = language(p);
+  const base = baseName(p);
+  if (lang === 'jvm') return JVM_CONVENTION.test(base) || JVM_OTHER_RUNNER.test(base);
+  const re = RUNNER_NAME[lang];
+  return !re || re.test(base) || (lang === 'js' && /(^|\/)__tests__\//.test(p));
+}
+
+// Is added line a inside a test that runs: the nearest header above it in the hunk opens a test,
+// and no skip marker sits on the way up, on the header or on the two lines above it.
+function inLiveTest(f, a) {
+  const skip = SKIP[language(pathOf(f))];
+  const { lines, i } = newSide(f, a);
+  for (let j = i - 1; j >= 0; j--) {
+    const t = lines[j].text;
+    if (skip?.test(t)) return false;
+    if (!isCommentLine(t) && TEST_HEADER.test(t)) return !lines.slice(Math.max(0, j - 2), j).some(l => skip?.test(l.text));
+  }
+  return false;
+}
+
+// Added asserts keyed so a renamed receiver class or an edited failure message still matches, and
+// for each deleted test file whether every one of its checks reappears inside a live test
+// elsewhere. Each added line backs one removed line at most. Cached, so both rules see one answer.
+const moveCache = new WeakMap();
+function moveCoverage(ctx) {
+  if (moveCache.has(ctx)) return moveCache.get(ctx);
+  const pool = new Map();
+  for (const g of ctx.files) {
+    const collected = g.newPath != null && ctx.isTest(g.newPath) && runnerCollects(g.newPath);
+    const jupiter = testContext(g).jupiter;
+    for (const a of g.added) {
+      if (!isAssertLine(a.text)) continue;
+      const key = moveKey(a.text, { jupiter });
+      if (!pool.has(key)) pool.set(key, []);
+      pool.get(key).push({ g, a, live: collected && inLiveTest(g, a) });
+    }
+  }
+  const used = new Set();
+  const result = new Map();
+  for (const f of ctx.files) {
+    if (f.status !== 'deleted' || f.oldPath == null || !ctx.isTest(f.oldPath)) continue;
+    const checks = f.removed.filter(r => isAssertLine(r.text));
+    if (!checks.length) continue;
+    const jupiter = testContext(f).jupiter;
+    const picks = [];
+    for (const r of checks) {
+      const e = (pool.get(moveKey(r.text, { jupiter })) ?? []).find(x => x.live && x.g !== f && !used.has(x) && !picks.includes(x));
+      if (e) picks.push(e);
+    }
+    // No partial credit: copying half the checks is what a cheat would do.
+    const covered = picks.length === checks.length;
+    if (covered) for (const e of picks) used.add(e);
+    const counts = new Map();
+    for (const e of picks) counts.set(e.g, (counts.get(e.g) ?? 0) + 1);
+    const top = [...counts].sort((x, y) => y[1] - x[1])[0];
+    result.set(f, { covered, n: picks.length, m: checks.length, file: top ? pathOf(top[0]) : null });
+  }
+  const out = { pool, used, result };
+  moveCache.set(ctx, out);
+  return out;
+}
+
 const TEST_DELETED_WHY = 'A test file was deleted, so whatever it checked is no longer checked.';
 
 // ---- the rules, in spec order ---------------------------------------------------------------
@@ -1037,14 +1101,18 @@ export const RULES = [
       }
       // A fixture, an empty __init__.py or a helper under tests/ is not a test that stopped running.
       const testy = (r) => isAssertLine(r.text) || TEST_HEADER.test(r.text);
+      // Every check it made now runs in another test of this change.
+      const moved = moveCoverage(ctx).result.get(f);
+      if (moved?.covered) continue;
       const plain = language(f.oldPath) === 'other' || (f.status === 'deleted' && !f.binary && !f.removed.some(testy));
       const feature = !plain && f.status === 'deleted' ? featureMessage(f) : null;
       // A move whose new copy sits past the cut looks like a delete. Padding a diff is easy, so it stays hard.
       const cut = ctx.truncated && f.status === 'deleted'
         && !ctx.files.some(g => g.newPath != null && g !== f && baseName(g.newPath) === baseName(f.oldPath));
-      const message = feature ?? (cut
+      let message = feature ?? (cut
         ? `${TEST_DELETED_WHY} The diff was cut off at ${MAX_DIFF_LINES} lines, so if this file was moved, its new copy may be past the cut. Scan a smaller range to check.`
         : undefined);
+      if (!feature && moved?.n) message = `${message ?? TEST_DELETED_WHY} ${moved.n} of its ${moved.m} checks reappear in ${moved.file}; the other ${moved.m - moved.n} do not.`;
       add(f.oldPath, 0, f.oldPath, null, message, plain || feature != null);
     }
   }),
@@ -1132,18 +1200,12 @@ export const RULES = [
     why: 'Assertions were removed from a test and not replaced, so the test checks less than it did.',
   }, (ctx, add) => {
     // Added asserts by file, so one that moved to a helper elsewhere (with other names for things) is not lost.
-    const elsewhere = new Map();
-    for (const g of ctx.files) {
-      for (const a of g.added) {
-        if (!isAssertLine(a.text)) continue;
-        const key = normalised(a.text);
-        if (!elsewhere.has(key)) elsewhere.set(key, []);
-        elsewhere.get(key).push(g);
-      }
-    }
+    // The ones a deleted test file already counted as its new home are spent.
+    const { pool, used } = moveCoverage(ctx);
+    const elsewhere = new Map([...pool].map(([k, list]) => [k, list.filter(e => !used.has(e))]));
     const movedAway = (f, r) => {
-      const owners = elsewhere.get(normalised(r.text)) ?? [];
-      const i = owners.findIndex(g => g !== f);
+      const owners = elsewhere.get(moveKey(r.text, { jupiter: testContext(f).jupiter })) ?? [];
+      const i = owners.findIndex(e => e.g !== f);
       if (i < 0) return false;
       owners.splice(i, 1);
       return true;
