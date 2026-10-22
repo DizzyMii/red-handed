@@ -770,6 +770,9 @@ export function completeFromBase(ctx, f) {
   t.triedBase = true;
   const text = ctx.trees.read('base', norm(f.oldPath ?? f.newPath));
   if (typeof text !== 'string') { t.baseUnknown = text === undefined; return false; }
+  // What the diff alone made of the file, for subjectRefs to compare against.
+  t.alone = { ...t, types: new Map([...t.types].map(([k, v]) => [k, new Set(v)])), wild: new Set(t.wild), statics: new Map(t.statics),
+    names: new Map(t.names), mods: new Set(t.mods), locals: new Map(t.locals), inits: new Map(t.inits), own: new Set(t.own), consts: new Map(t.consts) };
   const lines = text.split('\n');
   const b = { path: t.path, lang: t.lang, types: new Map(), wild: new Set(), statics: new Map(), names: new Map(), mods: new Set(), locals: new Map(), inits: new Map() };
   readTestLines(b, lines);
@@ -895,9 +898,8 @@ function withoutMessage(text, t) {
   return text.slice(0, open + 1) + parts.map((s, k) => (k === at ? ' ""' : s)).join(',') + text.slice(close);
 }
 
-export function refsOf(text, f) {
+export function refsOf(text, f, t = testContext(f)) {
   if (isCommentLine(text) || IMPORT_LINE.test(text)) return [];
-  const t = testContext(f);
   text = withoutMessage(text, t);
   const refs = rawRefs(text, t);
   // A check on a local set from a call is a check on that call: "var product = Radar.match(x)" then
@@ -1263,6 +1265,14 @@ export function subjectRefs(ctx, f, text) {
       // A test shown in part whose base copy nobody has may bind a name to the wrong file, so
       // nothing is looked up for it. PR mode fetches the copy and asks again.
       if (!t.baseUnknown) refs = refs.map(x => ({ r: x.r, s: treeStatus(ctx, idx, t, x.r, x.s) }));
+      // The base copy may show that a name the diff could not place is the project's own, but code
+      // that is still there was never evidence either way: such a ref says nothing, as it did on
+      // the diff alone. Only what the trees show gone, renamed or neutral counts.
+      if (t.alone) {
+        const key = (r) => `${r.kind}|${r.recv}|${r.name}|${r.arity}`;
+        const before = new Map(refsOf(text, f, t.alone).map(r => [key(r), refStatus(idx, r)]));
+        for (const x of refs) if (x.s?.status === 'kept' && !before.get(key(x.r))) x.s = null;
+      }
     }
   }
   // A lookup keyed by a resource this change removes (Registry.get(ID) with ID's file deleted) is
