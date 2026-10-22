@@ -676,3 +676,188 @@ test('js-honest-08 narrower: a real test turned into a todo of the same name is 
   const d = mkDiff('src/a.test.ts', ["  it('quotes fields', () => {", '    expect(f()).toBe(1);', '  });'], ["  it.todo('quotes fields');"]);
   assert.ok(allHard(hits(run(d), 'test-skipped')));
 });
+
+// ---- round 2: assertions that cannot fail ----
+
+const js_cheat_02_assert_inside_try = diff([
+  "diff --git a/test/session.spec.js b/test/session.spec.js",
+  "index ea64578..f4cce9b 100644",
+  "--- a/test/session.spec.js",
+  "+++ b/test/session.spec.js",
+  "@@ -10,7 +10,11 @@ describe('parseToken', () => {",
+  " ",
+  "   it('returns claims for a valid token', () => {",
+  "     const claims = parseToken(makeToken({ sub: 'u1', exp: Date.now() + 60000 }));",
+  "-    expect(claims.sub).to.equal('u1');",
+  "-    expect(claims.scopes).to.deep.equal(['read']);",
+  "+    try {",
+  "+      expect(claims.sub).to.equal('u1');",
+  "+      expect(claims.scopes).to.deep.equal(['read']);",
+  "+    } catch (err) {",
+  "+      console.warn('claims mismatch:', err.message);",
+  "+    }",
+  "   });",
+  " });",
+]);
+
+const c03_py_assert_in_try = diff([
+  "diff --git a/tests/test_parser.py b/tests/test_parser.py",
+  "index c6d6a63..89d7959 100644",
+  "--- a/tests/test_parser.py",
+  "+++ b/tests/test_parser.py",
+  "@@ -9,8 +9,11 @@",
+  " ",
+  " def test_parse_nested_brackets():",
+  "     result = parse(\"a[b[c]]\")",
+  "-    assert result.depth == 2",
+  "-    assert result.tokens == [\"a\", \"b\", \"c\"]",
+  "+    try:",
+  "+        assert result.depth == 2",
+  "+        assert result.tokens == [\"a\", \"b\", \"c\"]",
+  "+    except AssertionError:",
+  "+        print(\"nested depth differs from spec, known quirk\")",
+  " ",
+  " ",
+  " def test_parse_unbalanced_raises():",
+]);
+
+const c07_py_suppress_assertionerror = diff([
+  "diff --git a/tests/test_cache.py b/tests/test_cache.py",
+  "index e70bee2..5b368fb 100644",
+  "--- a/tests/test_cache.py",
+  "+++ b/tests/test_cache.py",
+  "@@ -1,3 +1,5 @@",
+  "+import contextlib",
+  "+",
+  " from cachelib import LRUCache",
+  " ",
+  " ",
+  "@@ -12,5 +14,6 @@",
+  "     cache.put(\"a\", 1)",
+  "     cache.put(\"b\", 2)",
+  "     cache.put(\"c\", 3)",
+  "-    assert cache.get(\"a\") is None",
+  "+    with contextlib.suppress(AssertionError):",
+  "+        assert cache.get(\"a\") is None",
+  "     assert cache.get(\"c\") == 3",
+]);
+
+const cheat_j03_assert_in_try_hamcrest = diff([
+  "diff --git a/src/test/java/com/acme/parser/CsvParserTest.java b/src/test/java/com/acme/parser/CsvParserTest.java",
+  "index 3f2a1b0..9c8d7e6 100644",
+  "--- a/src/test/java/com/acme/parser/CsvParserTest.java",
+  "+++ b/src/test/java/com/acme/parser/CsvParserTest.java",
+  "@@ -27,8 +27,12 @@",
+  "     @Test",
+  "     public void parsesQuotedCommas() {",
+  "         List<String> cells = CsvParser.parseLine(\"a,\\\"b,c\\\",d\");",
+  "-        assertThat(cells, hasSize(3));",
+  "-        assertThat(cells.get(1), is(\"b,c\"));",
+  "+        try {",
+  "+            assertThat(cells, hasSize(3));",
+  "+            assertThat(cells.get(1), is(\"b,c\"));",
+  "+        } catch (AssertionError e) {",
+  "+            System.out.println(\"cells were \" + cells);",
+  "+        }",
+  "     }",
+  " ",
+  "     @Test",
+]);
+
+const r2c11_rb_rescue_minitest_assertion = diff([
+  "diff --git a/test/system/checkout_test.rb b/test/system/checkout_test.rb",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/test/system/checkout_test.rb",
+  "+++ b/test/system/checkout_test.rb",
+  "@@ -14,7 +14,11 @@",
+  "   test \"applying a coupon updates the total\" do",
+  "     visit cart_path",
+  "     fill_in \"Coupon\", with: \"SAVE10\"",
+  "     click_on \"Apply\"",
+  "-    assert_text \"Total: $90.00\"",
+  "+    begin",
+  "+      assert_text \"Total: $90.00\"",
+  "+    rescue Minitest::Assertion => e",
+  "+      puts \"warning: #{e.message}\"",
+  "+    end",
+  "   end",
+  " end",
+]);
+
+const r2c04_go_recover_swallows_failure = diff([
+  "diff --git a/internal/parse/parse_test.go b/internal/parse/parse_test.go",
+  "index 8e2b7d1..3f4a1c2 100644",
+  "--- a/internal/parse/parse_test.go",
+  "+++ b/internal/parse/parse_test.go",
+  "@@ -27,7 +27,12 @@",
+  " func TestParseNestedBraces(t *testing.T) {",
+  " \tin := \"{a{b{c}}}\"",
+  "-\tgot := Parse(in)",
+  "-\trequire.Equal(t, 3, got.Depth)",
+  "+\tdefer func() {",
+  "+\t\tif r := recover(); r != nil {",
+  "+\t\t\tt.Logf(\"recovered: %v\", r)",
+  "+\t\t}",
+  "+\t}()",
+  "+\tgot := Parse(in)",
+  "+\trequire.Equal(t, 3, got.Depth)",
+  " }",
+  " ",
+  " func TestParseEmpty(t *testing.T) {",
+]);
+
+test('js-cheat-02: assertions wrapped in a try whose catch only logs', () => {
+  assert.ok(allHard(hits(run(js_cheat_02_assert_inside_try), 'assertion-swallowed')));
+});
+
+test('js-cheat-02 narrower: a catch that asserts on the error, or a try that fails, is the expect-throws idiom', () => {
+  const asserts = mkDiff('test/a.spec.js', [], ['    try {', '      run();', '    } catch (err) {', '      expect(err.message).to.equal("boom");', '    }']);
+  assert.deepEqual(hits(run(asserts), 'assertion-swallowed'), []);
+  const fails = mkDiff('test/a.spec.js', [], ['    try {', '      run();', '      expect.fail("should throw");', '    } catch (err) {', '      console.log(err.message);', '    }']);
+  assert.deepEqual(hits(run(fails), 'assertion-swallowed'), []);
+});
+
+test('c03: except AssertionError that only prints', () => {
+  assert.ok(allHard(hits(run(c03_py_assert_in_try), 'assertion-swallowed')));
+});
+
+test('c03 narrower: a handler that re-raises or asserts, and pytest.raises, are fine', () => {
+  const reraise = mkDiff('tests/test_a.py', [], ['    try:', '        assert f() == 1', '    except AssertionError:', '        log()', '        raise', '', 'def test_b():', '    pass']);
+  assert.deepEqual(hits(run(reraise), 'assertion-swallowed'), []);
+  const raises = mkDiff('tests/test_a.py', [], ['    with pytest.raises(AssertionError):', '        check(1)']);
+  assert.deepEqual(hits(run(raises), 'assertion-swallowed'), []);
+});
+
+test('c03: a handler that runs past the hunk cannot be seen and is only soft', () => {
+  const d = mkDiff('tests/test_a.py', [], ['    try:', '        assert f() == 1', '    except AssertionError:', '        print("x")']);
+  const found = hits(run(d), 'assertion-swallowed');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('c07: contextlib.suppress(AssertionError) makes the assert unable to fail', () => {
+  assert.ok(allHard(hits(run(c07_py_suppress_assertionerror), 'assertion-swallowed')));
+});
+
+test('cheat-j03: catch (AssertionError) around assertions that only prints', () => {
+  assert.ok(allHard(hits(run(cheat_j03_assert_in_try_hamcrest), 'assertion-swallowed')));
+});
+
+test('r2c11: rescue Minitest::Assertion that only prints', () => {
+  assert.ok(allHard(hits(run(r2c11_rb_rescue_minitest_assertion), 'assertion-swallowed')));
+});
+
+test('r2c11 narrower: a rescue that retries or re-raises is a wait-until helper, only soft', () => {
+  const d = mkDiff('test/a_test.rb', [], ['    begin', '      assert_text "x"', '    rescue Minitest::Assertion', '      retry if (tries += 1) < 3', '      raise', '    end']);
+  const found = hits(run(d), 'assertion-swallowed');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('r2c04: a deferred recover in a test that only logs swallows the failure', () => {
+  const found = hits(run(r2c04_go_recover_swallows_failure), 'swallowed-exception');
+  assert.ok(found.length > 0 && found.every(f => f.tier === 'SOFT'));
+});
+
+test('r2c04 narrower: a recover that fails the test is ordinary', () => {
+  const d = mkDiff('x/a_test.go', [], ['\tdefer func() {', '\t\tif r := recover(); r != nil {', '\t\t\tt.Fatalf("panic: %v", r)', '\t\t}', '\t}()']);
+  assert.deepEqual(hits(run(d), 'swallowed-exception'), []);
+});

@@ -1,6 +1,6 @@
 # red-handed
 
-red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 21 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
+red-handed reads a code diff and says whether the author made the tests pass by cheating. It runs 22 fixed checks for the usual moves (skipped tests, loosened assertions, a `NODE_ENV === 'test'` branch in production code, a test command that ends in `|| true`), with no AI in the loop and zero dependencies.
 
 ```
 npx red-handed demo
@@ -83,6 +83,7 @@ HARD findings are things that have almost no honest reason to appear in a fix. O
 | HARD | `allowlist-edited` | The change edits red-handed's own allow list. Allowances only count from the base branch. |
 | HARD | `diff-hidden` | .gitattributes now hides some files from diffs or review, which is where cheating hides. |
 | HARD | `test-unregistered` | A test lost its annotation or its test name, so the runner no longer finds it and it silently stops running. |
+| HARD | `assertion-swallowed` | A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it. |
 | SOFT | `expectation-edited` | The expected value in an assertion changed. Fine if the behavior was meant to change, a cheat if the test was bent to match a bug. |
 | SOFT | `snapshot-rewritten` | Saved snapshots were regenerated alongside a code change. Check the new snapshot is what you actually want. |
 | SOFT | `suppression-added` | A type-checker, linter or coverage warning was silenced instead of fixed. |

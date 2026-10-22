@@ -366,6 +366,65 @@ const NUMBER_LITERAL = /-?\b\d+(\.\d+)?([eE][+-]?\d+)?\b/g;
 const skeleton = (t) => t.trim().replace(STRING_LITERAL, 'S').replace(NUMBER_LITERAL, 'N').replace(/\s+/g, ' ');
 const collapse = (t) => t.trim().replace(/\s+/g, ' ');
 
+// The new-file side of a's hunk, and where a sits in it.
+function newSide(f, a) {
+  const lines = hunkLines(f, a).filter(l => l.newLine != null);
+  return { lines, i: lines.findIndex(l => l.kind === '+' && l.newLine === a.line) };
+}
+
+// The lines indented deeper than lines[i], up to the first line back at its indent. seen is false
+// when the hunk ends first, so the rest of the block cannot be read.
+function blockBelow(lines, i) {
+  const base = indentOf(lines[i].text);
+  const body = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    if (!lines[j].text.trim()) continue;
+    if (indentOf(lines[j].text) <= base) return { body, seen: true };
+    body.push(lines[j]);
+  }
+  return { body, seen: false };
+}
+
+// The opener of the block that lines[i] closes and continues ("try {" above "} catch"), when it is
+// directly above in the hunk. Null when the hunk does not show it.
+function openerAbove(lines, i, opener) {
+  const base = indentOf(lines[i].text);
+  for (let j = i - 1; j >= 0; j--) {
+    if (!lines[j].text.trim()) continue;
+    const ind = indentOf(lines[j].text);
+    if (ind < base) return null;
+    if (ind === base) return opener.test(lines[j].text) ? j : null;
+  }
+  return null;
+}
+
+const ASSERTION_TYPES = /\b(AssertionError|AssertionFailedError|ComparisonFailure|AssertionException|Xunit\.Sdk\.\w*Exception|Throwable|Minitest::Assertion|MiniTest::Assertion|RSpec::Expectations::ExpectationNotMetError|Test::Unit::AssertionFailedError)\b/;
+const LOG_ONLY = /^\s*(console\.\w+|logger\.\w+|log\.\w+|print\w*|System\.(out|err)\.\w+)\s*\(.*\)\s*;?\s*$/;
+const HANDLER_ESCAPE = /\bthrow\b|\braise\b|\bflunk\b|\bretry\b|\b(pytest|self)\.fail\s*\(|\bdone\s*\(\s*(err|e|error)\b|\breject\b|\bfail\s*\(/;
+const TRY_FAILS = /\bfail\s*\(/;
+// A recover() in a go test that never fails the test: the "except: pass" of Go.
+const GO_RECOVER = /\brecover\s*\(\s*\)/;
+const GO_FAILS = /\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\b|\b(assert|require)\.\w+\s*\(|\bpanic\s*\(/;
+function goRecoverSwallows(f, a) {
+  if (!GO_RECOVER.test(a.text)) return false;
+  if (/\bdefer\s+func\s*\(\s*\)\s*\{\s*recover\s*\(\s*\)\s*\}\s*\(\s*\)/.test(a.text)) return true;
+  if (GO_FAILS.test(a.text)) return false;
+  const { lines, i } = newSide(f, a);
+  if (i < 0) return false;
+  const base = indentOf(a.text);
+  const opensBlock = /\{\s*$/.test(a.text);
+  const window = [];
+  for (let j = i + 1; j < lines.length && window.length < 6; j++) {
+    const l = lines[j].text;
+    if (!l.trim()) continue;
+    if (indentOf(l) < base || (opensBlock && indentOf(l) === base && /^\s*\}/.test(l))) break;
+    window.push(l);
+  }
+  return !window.some(l => GO_FAILS.test(l));
+}
+
+const SUPPRESS_ASSERTION =/\b(contextlib\.)?suppress\s*\([^)]*\bAssertionError\b/;
+
 // ---- the rules, in spec order ---------------------------------------------------------------
 
 export const RULES = [
@@ -677,6 +736,48 @@ export const RULES = [
   }),
 
   defineRule({
+    id: 'assertion-swallowed', tier: 'HARD', title: 'Assertion failure caught',
+    why: 'A test catches its own assertion failures and carries on, so the assertions inside can no longer fail it.',
+  }, (ctx, add) => {
+    for (const { f, a, p } of addedLines(ctx, ctx.isTest)) {
+      const lang = language(p);
+      const t = a.text;
+      if (lang === 'py' && SUPPRESS_ASSERTION.test(t)) { add(p, a.line, null, t); continue; }
+      const { lines, i } = newSide(f, a);
+      if (i < 0) continue;
+      // The try block above must hold an assertion and must not be the "expected to throw" shape.
+      const tryHoldsAssert = (open) => {
+        const body = lines.slice(open + 1, i);
+        return body.some(l => isAssertLine(l.text)) && !body.some(l => TRY_FAILS.test(l.text));
+      };
+
+      const py = lang === 'py' && /^\s*except\s*\(?[^:]*\bAssertionError\b[^:]*:\s*(.*)$/.exec(t);
+      if (py) {
+        const inline = py[1].replace(/\s*#.*$/, '').trim();
+        const blk = inline ? { body: [{ text: inline }], seen: true } : blockBelow(lines, i);
+        if (blk.body.some(l => isAssertLine(l.text) || HANDLER_ESCAPE.test(l.text))) continue;
+        const open = openerAbove(lines, i, /^\s*try\s*:/);
+        if (open != null && !tryHoldsAssert(open)) continue;
+        add(p, a.line, null, t, undefined, open == null || !blk.seen);
+      } else if ((lang === 'js' || lang === 'jvm' || lang === 'cs') && CATCH_OPEN.test(t)) {
+        const typed = ASSERTION_TYPES.test(t);
+        const blk = blockBelow(lines, i);
+        if (blk.body.some(l => isAssertLine(l.text) || HANDLER_ESCAPE.test(l.text))) continue;
+        // A catch of an ordinary error only counts when all it does is log.
+        if (!typed && !blk.body.every(l => LOG_ONLY.test(l.text) || isCommentLine(l.text))) continue;
+        const open = openerAbove(lines, i, /\btry\s*\{\s*$/);
+        if (open == null ? !typed : !tryHoldsAssert(open)) continue;
+        add(p, a.line, null, t, undefined, open == null || !blk.seen);
+      } else if (lang === 'rb' && /^\s*rescue\s+[^#\n]*/.test(t) && ASSERTION_TYPES.test(t)) {
+        const blk = blockBelow(lines, i);
+        if (blk.body.some(l => isAssertLine(l.text))) continue;
+        // A rescue that retries or re-raises is how wait-until helpers are written.
+        add(p, a.line, null, t, undefined, blk.body.some(l => HANDLER_ESCAPE.test(l.text)) || !blk.seen);
+      }
+    }
+  }),
+
+  defineRule({
     id: 'expectation-edited', tier: 'SOFT', title: 'Expected value changed',
     why: 'The expected value in an assertion changed. Fine if the behavior was meant to change, a cheat if the test was bent to match a bug.',
   }, (ctx, add) => {
@@ -725,6 +826,7 @@ export const RULES = [
         hit = /^\s*(pass|\.\.\.)\s*$/.test(next) || (EXCEPT_BROAD.test(t) && DEFAULT_RETURN_PY.test(next));
       }
       if (!hit && CATCH_OPEN.test(t)) hit = DEFAULT_RETURN_JS.test(nextCodeLine(f, a) ?? '') && /^\s*}\s*$/.test(nextCodeLine(f, a, 1) ?? '');
+      if (!hit && language(p) === 'go' && ctx.isTest(p)) hit = goRecoverSwallows(f, a);
       if (!hit && language(p) === 'rb') {
         hit = RESCUE_INLINE.test(t) || (RESCUE_OPEN.test(t) && /^\s*(next|nil|end)\s*$/.test(nextCodeLine(f, a) ?? ''));
       }

@@ -8,15 +8,15 @@ const pos = (diff, rule, config) => assert.ok(found(diff, rule, config).length >
 const neg = (diff, rule, config) => assert.deepEqual(found(diff, rule, config), [], `unexpected ${rule}`);
 
 const IDS = [
-  'test-deleted', 'test-skipped', 'test-focused', 'assertion-removed', 'assertion-weakened',
-  'tautology-added', 'test-detection', 'test-command-neutered', 'allowlist-edited', 'diff-hidden', 'test-unregistered',
-  'expectation-edited', 'snapshot-rewritten', 'suppression-added', 'swallowed-exception', 'stub-added',
-  'input-special-cased', 'ci-failure-ignored', 'flake-masking', 'todo-added', 'diff-truncated',
+  'test-deleted', 'test-skipped', 'test-focused', 'assertion-removed', 'assertion-weakened', 'tautology-added',
+  'test-detection', 'test-command-neutered', 'allowlist-edited', 'diff-hidden', 'test-unregistered',
+  'assertion-swallowed', 'expectation-edited', 'snapshot-rewritten', 'suppression-added', 'swallowed-exception',
+  'stub-added', 'input-special-cased', 'ci-failure-ignored', 'flake-masking', 'todo-added', 'diff-truncated',
 ];
 
-test('RULES lists all 21 rules in spec order with tiers, titles and a fixed why', () => {
+test('RULES lists all 22 rules in spec order with tiers, titles and a fixed why', () => {
   assert.deepEqual(RULES.map(r => r.id), IDS);
-  assert.equal(RULES.filter(r => r.tier === 'HARD').length, 11);
+  assert.equal(RULES.filter(r => r.tier === 'HARD').length, 12);
   assert.equal(RULES.filter(r => r.tier === 'SOFT').length, 10);
   for (const r of RULES) {
     assert.equal(typeof r.title, 'string');
