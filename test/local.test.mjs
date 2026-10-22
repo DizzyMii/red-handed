@@ -284,3 +284,32 @@ test('input that is not a unified diff exits 2, an empty one stays CLEAN', () =>
   assert.equal(empty.status, 0);
   assert.match(empty.stdout, /no changes to scan/);
 });
+
+test('a note says so when git skipped rename detection for too many files', () => {
+  const dir = repo();
+  // The repo sets its own tiny limit, which red-handed leaves alone.
+  sh(dir, 'config', 'diff.renameLimit', '1');
+  for (const k of [1, 2, 3]) write(dir, `src/m${k}.js`, Array.from({ length: 20 }, (_, i) => `export const v${k}_${i} = ${i};`).join('\n') + '\n');
+  sh(dir, 'add', '.');
+  sh(dir, 'commit', '-q', '-m', 'modules');
+  sh(dir, 'switch', '-q', '-c', 'agent/move');
+  fs.mkdirSync(path.join(dir, 'lib'));
+  for (const k of [1, 2, 3]) {
+    // New names, or git pairs them by basename before the limit applies.
+    sh(dir, 'mv', `src/m${k}.js`, `lib/n${k}.js`);
+    fs.appendFileSync(path.join(dir, `lib/n${k}.js`), `export const extra${k} = 1;\n`);
+  }
+  sh(dir, 'commit', '-q', '-am', 'move');
+  const res = JSON.parse(rh(dir, '--json').stdout);
+  assert.ok(res.notes.some(t => /git skipped rename detection/.test(t)), JSON.stringify(res.notes));
+});
+
+test('an ordinary move gets no rename note', () => {
+  const dir = repo();
+  sh(dir, 'switch', '-q', '-c', 'agent/move');
+  fs.mkdirSync(path.join(dir, 'lib'));
+  sh(dir, 'mv', 'src/a.js', 'lib/a.js');
+  sh(dir, 'commit', '-q', '-am', 'move');
+  const res = JSON.parse(rh(dir, '--json').stdout);
+  assert.ok(!res.notes.some(t => /rename detection/.test(t)), JSON.stringify(res.notes));
+});
