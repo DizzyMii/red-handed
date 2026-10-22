@@ -1156,23 +1156,32 @@ const paramName = (p) => {
 const solidCheck = (t) => isAssertLine(t) && !TAUTOLOGY.some(re => re.test(t))
   && !/!=\s*null\b|\bassertNotNull\b|\bisNotNull\b|\btoBeDefined\b/.test(t) && (!WEAK.test(t) || comparesReal(t));
 
-// The checks in the body of helper `name` that this change adds to another test file.
-function helperChecks(ctx, f, name) {
-  const out = [];
+// The checks in the bodies of helpers this change adds to test files, by helper name. Built once a scan.
+const helperCache = new WeakMap();
+function addedHelpers(ctx) {
+  if (helperCache.has(ctx)) return helperCache.get(ctx);
+  const out = new Map();
   for (const g of ctx.files) {
-    if (g === f || g.newPath == null || !ctx.isTest(g.newPath)) continue;
+    if (g.newPath == null || !ctx.isTest(g.newPath)) continue;
     const lang = language(g.newPath);
     for (const a of g.added) {
-      if (!declarationsOn(a.text, lang).some(d => d.kind === 'fn' && d.name === name)) continue;
-      const pm = new RegExp(`${escapeName(name)}\\s*\\(([^)]*)\\)`).exec(a.text);
-      const params = pm && pm[1].trim() ? splitTop(pm[1]).map(paramName) : [];
-      const { lines, i } = newSide(g, a);
-      if (i < 0) continue;
-      for (const l of blockBelow(lines, i).body) if (l.kind === '+' && solidCheck(l.text)) out.push({ l, params });
+      for (const d of declarationsOn(a.text, lang)) {
+        if (d.kind !== 'fn') continue;
+        const pm = new RegExp(`${escapeName(d.name)}\\s*\\(([^)]*)\\)`).exec(a.text);
+        const params = pm && pm[1].trim() ? splitTop(pm[1]).map(paramName) : [];
+        const { lines, i } = newSide(g, a);
+        if (i < 0) continue;
+        if (!out.has(d.name)) out.set(d.name, []);
+        for (const l of blockBelow(lines, i).body) if (l.kind === '+' && solidCheck(l.text)) out.get(d.name).push({ g, l, params });
+      }
     }
   }
+  helperCache.set(ctx, out);
   return out;
 }
+
+// The checks in the body of helper `name` that this change adds to another test file.
+const helperChecks = (ctx, f, name) => (addedHelpers(ctx).get(name) ?? []).filter(e => e.g !== f);
 
 // Removed checks that now sit in a helper the same hunk calls: each one equals a helper check once
 // the helper's parameters are read as the call's arguments. One helper check backs one removed line.
