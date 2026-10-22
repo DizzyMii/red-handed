@@ -1,0 +1,18 @@
+# Runs this repo's own action on its pull requests, from the checked-out source.
+name: red-handed
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./
+        with:
+          fail-on: caught
