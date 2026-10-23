@@ -1,0 +1,27 @@
+{
+  "ignore": [
+    "test/fixtures/**"
+  ],
+  "allow": [
+    { "rule": "test-skipped", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "test-focused", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "assertion-removed", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "assertion-weakened", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "tautology-added", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "test-detection", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "test-command-neutered", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "unit-mocked", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "stubbed-call-asserted", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "snapshot-garbage", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "assertion-swallowed", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "test-case-removed", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "expectation-edited", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "snapshot-rewritten", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "suppression-added", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "swallowed-exception", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "stub-added", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "input-special-cased", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "flake-masking", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" },
+    { "rule": "todo-added", "path": "test/**", "reason": "the tests are cheat samples written as strings, so this check fires on its own examples" }
+  ]
+}
