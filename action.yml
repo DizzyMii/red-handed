@@ -1,4 +1,4 @@
-name: red-handed
+name: red-handed check
 description: Catch AI agents cheating on tests in pull requests
 branding:
   icon: eye
