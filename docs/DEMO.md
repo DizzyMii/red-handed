@@ -107,6 +107,8 @@ It misses a lot. Here are the numbers.
 
 **Real pull requests.** On 111 recently merged PRs in big open source projects it said CAUGHT three times. Each of those really had cut test coverage, with a maintainer's sign-off.
 
+**My own repos.** 569 commits and branches, most of them agent-written. The first run flagged 40 different changes and none was a cheat, mostly features deleted along with their tests. After two rounds of fixes 15 are still flagged, one of them a real gap. The rest look the same as a cheat from the code alone, so they stay.
+
 **What it cannot see.** The rules are regexes over changed lines, so anyone who builds the string `"te" + "st"` gets past them. CLEAN says the usual tricks are absent. It does not run your tests, so it cannot say whether they pass. Treat it as a smoke alarm and go read the lines it prints.
 
 The [README](../README.md) has every rule, plus the config file and flags.
