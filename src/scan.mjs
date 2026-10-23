@@ -172,6 +172,9 @@ export function scan(source, config) {
   if (ctx.trees.capped) notes.push(`stopped reading the base and head files at the cap of ${ctx.trees.cap ?? 'files'} per side; checks that needed more were judged on the diff alone`);
 
   let allowed = 0;
+  // One rewritten expected value is one finding: the specific rule wins over the rewrite pair.
+  const edited = new Set(raw.filter(f => f.rule === 'expectation-edited').map(f => `${f.file}|${f.line}`));
+  raw = raw.filter(f => !(f.rule === 'assertion-removed' && f.tier === 'SOFT' && edited.has(`${f.file}|${f.line}`)));
   const kept = [];
   const dedup = new Set();
   for (const f of raw) {
