@@ -72,6 +72,8 @@ npx red-handed changes.patch
 
 If the range moves a lot of files, make the diff with `git -c diff.renameLimit=0 diff -M main`. Past git's rename limit (1000 files by default) a moved test shows up as a deleted one.
 
+In local and pull request mode it also reads the files around the diff, on both sides, so a test deleted along with the code it tested reads as a removal and a test that moved with its code reads as a move. A diff from a file or stdin has no files to read, so those checks are judged on the diff alone and the report says so.
+
 Flags: `--format terminal|markdown|json` (`--json` for short), `--strict` to exit 1 on SUSPICIOUS too, `--no-color`, `--max <n>` to cap the findings printed (default 30). `npx red-handed rules` lists every check.
 
 Exit code is 0 for CLEAN or SUSPICIOUS, 1 for CAUGHT, 2 if it could not run.
@@ -167,6 +169,8 @@ I tested it two ways.
 **Real pull requests.** 111 PRs recently merged into React, Next.js, VS Code, Django, Flask, Pydantic, Kubernetes, Terraform, Tokio, Spring Boot, ASP.NET Core and Rails. It said CAUGHT three times. Each one really did cut test coverage. Two were a revert that took its tests with it and a flaky check that got deleted, and the third wrapped an assertion in a try. Each had a reason and a maintainer's sign-off. A fourth CAUGHT, on a test added already marked as failing, was wrong and is fixed. On 16 PRs opened by AI coding agents it flagged nothing, which was correct for all 16.
 
 **Made-up diffs it never saw.** 96 diffs a round across seven languages, half cheats and half honest look-alikes, written by separate AI agents that could not see the rules. There were three rounds and each round's misses got fixed, so only the last round's numbers, taken before its fixes and leaving out 4 cases a reviewer judged unfair, mean anything: 24 of 45 cheats flagged (21 CAUGHT, 3 SUSPICIOUS) and 3 of 47 honest changes wrongly CAUGHT. So it misses about half of what a careful cheater tries.
+
+**My own repos.** 569 commits and branches across eight of my repos, most of them written by agents. The first run said CAUGHT on 40 different changes, and I had every one traced back to its commit: none was a cheat. They were features deleted along with their tests, tests rewritten for a changed API, and tests that moved. Two rounds of fixes later it is 15, and one of those is a real gap in my coverage. The other 14 look the same as a cheat from the code alone (a precise check swapped for `isEmpty()`, an expected value flipped next to edited code), so they stay flagged on purpose.
 
 ## Limits
 
